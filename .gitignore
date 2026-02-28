@@ -1,0 +1,51 @@
+# Build artifacts
+build/
+out/
+*.exe
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+
+# IDE files
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln.docstates
+CMakeSettings.json
+
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Original game files (user-supplied)
+*.sfc
+*.smc
+*.srm
+*.fig
+*.swc
+firmware/
+
+# Auto-generated recompiled code
+gen/
+RecompiledFuncs/
+
+# Tool output
+tools/disasm/output/
+tools/recomp/output/
+tools/analyze/output/
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
