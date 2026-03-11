@@ -1,11 +1,13 @@
 /*
  * Super Mario Kart — Static Recompilation
  *
- * Now powered by snesrecomp: real SNES hardware (LakeSnes backend)
- * for PPU rendering, SPC700 audio, DMA, and full memory bus.
+ * Powered by snesrecomp (LakeSnes backend) for real SNES hardware.
+ * Recompiled game code drives the hardware via bus_read8/bus_write8.
  */
 
 #include <snesrecomp/snesrecomp.h>
+#include "smk/functions.h"
+#include "smk/cpu_ops.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -25,7 +27,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Load ROM */
+    /* Load ROM (LakeSnes auto-detects HiROM, sets up cart mapping) */
     const char *rom_path = find_rom_path(argc, argv);
     printf("Loading ROM: %s\n", rom_path);
     if (!snesrecomp_load_rom(rom_path)) {
@@ -35,16 +37,41 @@ int main(int argc, char *argv[]) {
     }
     printf("\n");
 
-    /* TODO: Register recompiled game functions here */
-    /* func_table_register(0x80803A, smk_80803A); */
+    /* Register all recompiled functions */
+    smk_register_all();
 
-    printf("Running... (press Escape to quit)\n");
+    /* === Run the boot chain === */
+    printf("--- Running boot chain ---\n");
+    smk_80FF70();
+    printf("--- Boot chain done ---\n\n");
 
-    /* Main loop */
+    printf("Running... (press Escape to quit)\n\n");
+
+    /* === Main frame loop === */
     while (snesrecomp_begin_frame()) {
-        /* TODO: Execute recompiled game frame here */
-        /* func_table_call(0x80803A); */
+        /*
+         * Frame structure (replaces the original NMI-driven loop):
+         *
+         * 1. Process NMI handler (what would run during VBlank)
+         *    - DMA transfers, brightness updates, state dispatch
+         *
+         * 2. Run one iteration of the main loop
+         *    - Frame setup / transition handling
+         *    - Game state handler dispatch
+         *
+         * 3. Render and present the frame
+         */
 
+        /* Simulate NMI: set DP $44 so main loop doesn't spin */
+        bus_wram_write16(g_cpu.DP + 0x44, 1);
+
+        /* Run NMI handler (DMA, brightness, NMI state dispatch) */
+        smk_808000();
+
+        /* Run one main loop iteration (frame setup + state handler) */
+        smk_808056();
+
+        /* Render PPU and present */
         snesrecomp_end_frame();
     }
 
