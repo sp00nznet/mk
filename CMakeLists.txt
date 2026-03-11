@@ -7,39 +7,16 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # SDL2
 find_package(SDL2 REQUIRED)
 
+# --- snesrecomp: real SNES hardware backend (LakeSnes + adapter) ---
+set(SNESRECOMP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(ext/snesrecomp)
+
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
-
-# --- smk_runtime (static lib) ---
-add_library(smk_runtime STATIC
-    src/recomp/cpu.c
-    src/recomp/memory.c
-    src/recomp/func_table.c
-)
-
-# --- smk_hal (static lib) ---
-add_library(smk_hal STATIC
-    src/hal/ppu.c
-    src/hal/apu.c
-    src/hal/dma.c
-    src/hal/dsp1.c
-    src/hal/io.c
-)
-target_link_libraries(smk_hal PRIVATE smk_runtime)
-
-# --- smk_platform (static lib) ---
-add_library(smk_platform STATIC
-    src/platform/sdl_backend.c
-    src/platform/input.c
-)
-target_link_libraries(smk_platform PRIVATE SDL2::SDL2 smk_hal)
 
 # --- smk_launcher (executable) ---
 add_executable(smk_launcher src/main/main.c)
 target_link_libraries(smk_launcher PRIVATE
-    smk_runtime
-    smk_hal
-    smk_platform
-    SDL2::SDL2
+    snesrecomp
     SDL2::SDL2main
 )

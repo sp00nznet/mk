@@ -1,0 +1,3 @@
+[submodule "ext/snesrecomp"]
+	path = ext/snesrecomp
+	url = https://github.com/sp00nznet/snesrecomp.git
