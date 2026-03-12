@@ -305,6 +305,57 @@ void smk_81E584(void) {
 }
 
 /*
+ * $81:E576 — Sprite tile decompression + 2bpp→4bpp interleave
+ *
+ * Called during init ($81:E000) to prepare sprite tile data:
+ * 1. $81:E592 — Decompress 2bpp sprite tile source from $C7:0000 → $7F:4400
+ * 2. $81:E5A0 — Interleave 2bpp → 4bpp: read from $7F:4400, write to $7F:A000
+ *              Each 2bpp tile row (2 bytes, planes 0-1) gets padded with 2 zero
+ *              bytes (planes 2-3) to make a 4bpp tile row (4 bytes).
+ *              8KB source → 16KB output at $7F:A000-$7F:DFFF.
+ * 3. $81:E584 — Decompress additional data from $C4:0594 → $7F:8000
+ */
+void smk_81E576(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x81);
+    op_rep(0x30);
+
+    /* JSR $E592 — Decompress sprite tiles from $C7:0000 → $7F:4400 */
+    op_ldy_imm16(0x0000);
+    op_lda_imm16(0x00C7);
+    op_ldx_imm16(0x4400);
+    smk_84E09E();
+
+    /* JSR $E5A0 — 2bpp→4bpp interleave: $7F:4400 → $7F:A000 */
+    {
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            uint8_t *src = wram + 0x10000;  /* $7F bank base */
+            uint16_t src_off = 0x4400;
+            uint16_t dst_off = 0xA000;
+
+            while (src_off < 0x4400 + 0x2000) {
+                /* Copy 8 words (16 bytes) from source — planes 0-1 of 8 rows */
+                for (int i = 0; i < 16; i++) {
+                    src[dst_off++] = src[src_off++];
+                }
+                /* Pad 8 words (16 bytes) of zeros — planes 2-3 */
+                for (int i = 0; i < 16; i++) {
+                    src[dst_off++] = 0;
+                }
+            }
+            printf("smk: sprite tiles interleaved: $7F:4400 → $7F:A000 (%d bytes)\n",
+                   dst_off - 0xA000);
+        }
+    }
+
+    /* JSR $E584 — Decompress additional data */
+    smk_81E584();
+
+    g_cpu.DB = saved_db;
+}
+
+/*
  * $81:E933 — Title screen VRAM DMA transfers
  *
  * DMA transfers tilemap data from WRAM $7F:D200/$7F:D2C0
@@ -586,28 +637,76 @@ void smk_858000(void) {
     }
 
     /* JSR $821C — display flag configuration
-     * Reads DP $30, $2E, $2C and configures layer enables in DP $85.
-     * For the title screen with no save data, $30=0, $2E=0, $2C=0:
-     *   → $85 = $01 (BG1 only) */
+     * For the title screen with no save data ($30=0, $2E=0, $2C=0):
+     *   $85 = $01 (BG1 enabled flag)
+     *   $80 is set to 1, JSR $8865 runs (sprite config init), then $80 = 0
+     *   PPU registers set at $85:8277 */
     {
-        uint8_t disp_flags = 0x01;  /* Default for title screen */
-        bus_wram_write8(g_cpu.DP + 0x85, disp_flags);
-        bus_wram_write8(g_cpu.DP + 0x80, 0x01);  /* Mode = 1 */
+        /* DP $85 = display flags. $30=0 → skip first branch.
+         * $2E=0 → ORA #$01 → $85=$01. $2C=0 → skip. */
+        bus_wram_write8(g_cpu.DP + 0x85, 0x01);
+
+        /* $85:826E: $2E < 2 → run sprite init.
+         * Sets $80=1, calls $8865 (sprite table setup), then $80=0. */
+        /* $85:8865 clears sprite config buffers and initializes sprite slots.
+         * For now, stub it — just clear the buffers. */
+        {
+            uint8_t *wram = bus_get_wram();
+            if (wram) {
+                /* Fill $0310-$03FF with $E0F8 (offscreen) */
+                for (int i = 0; i < 0xF0; i += 2) {
+                    wram[0x0310 + i] = 0xF8;
+                    wram[0x0310 + i + 1] = 0xE0;
+                }
+                /* Fill $0300-$030F with $E0F8 */
+                for (int i = 0; i < 0x10; i += 2) {
+                    wram[0x0300 + i] = 0xF8;
+                    wram[0x0300 + i + 1] = 0xE0;
+                }
+            }
+        }
+        bus_wram_write8(g_cpu.DP + 0x80, 0x00);  /* STZ $80 — mode 0 (OAM build) */
     }
 
     /* REP #$30 */
     op_rep(0x30);
 
     /* JSR $8F84 — OAM/sprite table init (sets up $0284-$028A) */
-    /* Skip — OAM animation data, not needed for static display */
+    /* Skip for now — OAM animation data tables */
 
     /* Final: set DP vars */
     bus_wram_write16(g_cpu.DP + 0x8C, 0x3800);
     bus_wram_write16(g_cpu.DP + 0x8E, 0);
     bus_wram_write16(g_cpu.DP + 0x62, 0);
 
+    /* Place test sprites in OAM to verify sprite rendering.
+     * These will be replaced by the real OAM builder ($85:8B7A) later. */
+    {
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            for (int i = 0; i < 8; i++) {
+                int oam_off = 0x0200 + i * 4;
+                wram[oam_off + 0] = 48 + i * 24;
+                wram[oam_off + 1] = 100;
+                wram[oam_off + 2] = i * 2;
+                wram[oam_off + 3] = 0x30;
+            }
+            for (int i = 0; i < 8; i++) {
+                int oam_off = 0x0200 + (8 + i) * 4;
+                wram[oam_off + 0] = 48 + i * 24;
+                wram[oam_off + 1] = 120;
+                wram[oam_off + 2] = 16 + i * 2;
+                wram[oam_off + 3] = 0x30;
+            }
+            wram[0x0400] = 0xAA;
+            wram[0x0401] = 0xAA;
+            wram[0x0402] = 0xAA;
+            wram[0x0403] = 0xAA;
+        }
+    }
+
     g_cpu.DB = saved_db;
-    printf("smk: title screen graphics setup complete (palette+sprites+OAM)\n");
+    printf("smk: title screen graphics setup complete\n");
 }
 
 /*
@@ -657,14 +756,11 @@ void smk_81E0AD(void) {
      * Critical for visual output but has many sub-calls. Stub for now. */
     func_table_call(0x858000);
 
-    /* $85:821C (display flags) is not yet recompiled. Apply the PPU register
-     * values that the title screen path at $85:8277 would set.
-     * Decoded from ROM bytes: A9 01 8D 05 21 A9 17 8D 2C 21 ... */
-    bus_write8(0x81, 0x2105, 0x09);  /* BGMODE: Mode 1, BG3 priority */
-    bus_write8(0x81, 0x212C, 0x14);  /* TM: BG3+OBJ (BG1/BG2 disabled — no tilemap data) */
-    /* PPU registers from $85:8277 (title screen display flags path).
-     * Title screen renders on BG3: tilemap at $1C00, tiles at $2000.
-     * BG1/BG2 tilemaps are empty (transparent). */
+    /* PPU registers from $85:8277 (applied by $85:821C display flags path) */
+    bus_write8(0x81, 0x2105, 0x01);  /* BGMODE: Mode 1 */
+    bus_write8(0x81, 0x212C, 0x17);  /* TM: BG1+BG2+BG3+OBJ */
+    bus_write8(0x81, 0x2123, 0x22);  /* W12SEL: window 1 enable for BG2+BG3 */
+    bus_write8(0x81, 0x212E, 0x03);  /* TMW: window masking on BG1+BG2 */
     bus_write8(0x81, 0x2107, 0x10);  /* BG1SC: tilemap at VRAM $1000, 32x32 */
     bus_write8(0x81, 0x2108, 0x15);  /* BG2SC: tilemap at VRAM $1400, 64x32 */
     bus_write8(0x81, 0x2109, 0x1C);  /* BG3SC: tilemap at VRAM $1C00, 32x32 */
@@ -681,4 +777,47 @@ void smk_81E0AD(void) {
 
     g_cpu.DB = saved_db;
     printf("smk: title screen transition complete\n");
+}
+
+/*
+ * $85:8045 — Per-frame sprite update
+ *
+ * Called from $80:80BA each frame during the title screen.
+ * Manages sprite animation state machine, OAM building, HDMA.
+ *
+ * Original flow:
+ *   JSL $81BB70    ; ??? (some init)
+ *   JSR $92F9      ; ??? (some processing)
+ *   LDA $7B / BNE skip  ; if $7B != 0, skip all
+ *   SEP #$30
+ *   JSR $84D8      ; per-frame setup
+ *   LDA $80 / AND #7 / ASL / TAX / JMP ($839B,x)  ; mode dispatch
+ *     mode 0 ($8061): JSR $84D1 / LDA #$0200 / STA $3C / JSR $8B7A / JSL $81CB44
+ *     mode 1 ($8077): JSR $8602 / JSR $8718
+ *   REP #$30
+ *   LDA $80 / BNE skip
+ *   JSL $84FD25    ; ??? (only in mode 0)
+ *   PLB / RTL
+ *
+ * For now: stub — the test sprites in OAM handle rendering.
+ * The real OAM builder ($85:8B7A) will be implemented later.
+ */
+void smk_858045(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x85);
+
+    /* JSL $81BB70 — skip for now */
+    /* JSR $92F9 — skip for now */
+
+    /* LDA $7B / BNE skip */
+    uint16_t v7b = bus_wram_read16(g_cpu.DP + 0x7B);
+    if (v7b != 0) {
+        g_cpu.DB = saved_db;
+        return;
+    }
+
+    /* The mode dispatch based on DP $80 would go here.
+     * For now, skip the OAM builder — test sprites are static. */
+
+    g_cpu.DB = saved_db;
 }

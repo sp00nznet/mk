@@ -49,8 +49,10 @@ int main(int argc, char *argv[]) {
 
     /* === Main frame loop === */
     while (snesrecomp_begin_frame()) {
-        /* Simulate NMI: set DP $44 so main loop doesn't spin */
-        bus_wram_write16(g_cpu.DP + 0x44, 1);
+        /* Clear NMI flag before NMI handler — the handler itself sets $44
+         * (smk_808237 sets $44=$FFFF, smk_8081DD sets $44=1).
+         * If we pre-set $44=1, state $04's BNE check exits early. */
+        bus_wram_write16(g_cpu.DP + 0x44, 0);
 
         /* Run NMI handler (DMA, brightness, NMI state dispatch) */
         smk_808000();

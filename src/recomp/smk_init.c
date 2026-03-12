@@ -82,8 +82,11 @@ void smk_81E000(void) {
     /* JSR $F7E1 — Additional init (checks $0140, inits DP vars) */
     /* Skip for now — initializes based on save state that doesn't exist yet */
 
-    /* JSL $81E576, $81E4B3 — additional setup */
-    /* Skip for now — will be recompiled when needed */
+    /* JSL $81E576 — Sprite tile decompression + 2bpp→4bpp interleave */
+    smk_81E576();
+
+    /* JSL $81E4B3 — Mode 7 tile setup */
+    /* Skip for now — Mode 7 not yet needed */
 
     /* JSL $00FF93 — trivial (PHB/PHK/PLB/PLB/RTL) */
     /* Does nothing useful */
@@ -326,10 +329,12 @@ void smk_register_all(void) {
     func_table_register(0x81E118, smk_81E118);  /* title tilemap */
     func_table_register(0x81E584, smk_81E584);  /* title palette data */
     func_table_register(0x81E933, smk_81E933);  /* title VRAM DMA */
+    func_table_register(0x81E576, smk_81E576);  /* sprite tile interleave */
     func_table_register(0x84E09E, smk_84E09E);  /* VRAM data loader */
     func_table_register(0x84F38C, smk_84F38C);  /* PPU reset */
     func_table_register(0x84FCF1, smk_84FCF1);  /* SRAM checksum */
     func_table_register(0x858000, smk_858000);  /* title gfx setup */
+    func_table_register(0x858045, smk_858045);  /* per-frame sprite update */
 
-    printf("smk: registered %d recompiled functions\n", 26);
+    printf("smk: registered %d recompiled functions\n", 28);
 }

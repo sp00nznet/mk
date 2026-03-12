@@ -206,8 +206,15 @@ void smk_8080BA(void) {
     /* INC $38 — game frame counter */
     op_inc_dp16(0x38);
 
-    /* The rest calls title screen logic subroutines.
-     * These will be recompiled as we trace deeper. */
+    /* LDA #$0040 / STA $015E — fade step */
+    op_lda_imm16(0x0040);
+    op_sta_abs16(0x015E);
+
+    /* JSL $858045 — per-frame sprite update */
+    smk_858045();
+
+    /* JSR $853D — additional title screen logic */
+    /* Skip for now */
 }
 
 /*

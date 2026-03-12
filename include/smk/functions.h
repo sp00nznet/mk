@@ -26,6 +26,7 @@ void smk_8081B5(void);  /* NMI cleanup: audio + input + misc */
 
 /* === Bank $85 === */
 void smk_858000(void);  /* Title screen sprite/palette/OAM setup */
+void smk_858045(void);  /* Per-frame sprite update */
 void smk_85809B(void);  /* BG scroll + HDMA trigger */
 
 /* === Bank $84 === */
@@ -43,5 +44,6 @@ void smk_81E10A(void);  /* Load title screen tiles to VRAM */
 void smk_81E118(void);  /* Load title screen tilemap to VRAM */
 void smk_81E584(void);  /* Load title screen palette data */
 void smk_81E933(void);  /* Title screen VRAM DMA transfers */
+void smk_81E576(void);  /* Sprite tile decompression + 2bpp→4bpp interleave */
 
 #endif /* SMK_FUNCTIONS_H */
