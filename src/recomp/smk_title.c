@@ -71,14 +71,14 @@ void smk_84E09E(void) {
             /* Mode = (cmd << 3) & 0xE0 */
             mode = (cmd << 3) & 0xE0;
 
-            /* Read 2 bytes: overlapping 16-bit reads to get count
-             * Original reads $12 = word at [ptr], then $13 = word at [ptr-1]
-             * Net effect: $12 = low byte of word, count = word & 0x03FF
-             * Actually: read 16-bit at src_pos, mask low 10 bits, that's the count */
+            /* Count: 1 data byte + cmd bits 0-1 as high 2 bits (10-bit total).
+             * Original 65816 does overlapping reads to merge cmd into count:
+             *   STA $12 = word@[src] → $12=lo, $13=hi
+             *   STA $13 = word@[src-1] → $13=cmd, $14=lo
+             *   LDA $12 → lo | (cmd << 8), AND #$03FF */
             uint8_t lo = bus_read8(data_bank, src_pos);
-            uint8_t hi = bus_read8(data_bank, src_pos + 1);
-            src_pos += 2;
-            count = ((lo | (hi << 8)) & 0x03FF) + 1;
+            src_pos += 1;
+            count = (lo | ((uint16_t)(cmd & 0x03) << 8)) + 1;
         } else {
             /* Regular command: mode is top 3 bits, count is bottom 5 bits + 1 */
             mode = cmd & 0xE0;
@@ -130,14 +130,12 @@ void smk_84E09E(void) {
             break;
 
         case 0x80:
-            /* Back-reference: copy from (buf_pos - offset) */
-            /* Next 2 bytes = source offset added to base VRAM addr */
+            /* Back-reference: read 16-bit offset, add vram_dest (DP $00) */
             {
                 uint16_t ref_lo = bus_read8(data_bank, src_pos);
                 uint16_t ref_hi = bus_read8(data_bank, src_pos + 1);
                 src_pos += 2;
-                uint16_t ref_addr = ref_lo | (ref_hi << 8);
-                /* ref_addr is relative to buffer base */
+                uint16_t ref_addr = (ref_lo | (ref_hi << 8)) + vram_dest;
                 for (int i = 0; i < count; i++) {
                     buf[buf_pos] = buf[ref_addr];
                     buf_pos++;
@@ -147,12 +145,12 @@ void smk_84E09E(void) {
             break;
 
         case 0xA0:
-            /* Back-reference with XOR $FF (inverted copy) */
+            /* Back-reference with XOR $FF: read 16-bit offset, add vram_dest */
             {
                 uint16_t ref_lo = bus_read8(data_bank, src_pos);
                 uint16_t ref_hi = bus_read8(data_bank, src_pos + 1);
                 src_pos += 2;
-                uint16_t ref_addr = ref_lo | (ref_hi << 8);
+                uint16_t ref_addr = (ref_lo | (ref_hi << 8)) + vram_dest;
                 for (int i = 0; i < count; i++) {
                     buf[buf_pos] = buf[ref_addr] ^ 0xFF;
                     buf_pos++;
@@ -162,11 +160,13 @@ void smk_84E09E(void) {
             break;
 
         case 0xC0:
-            /* Back-reference from byte offset */
+        case 0xE0:
+            /* Byte-offset back-reference: ref = buf_pos - offset_byte.
+             * Mode $E0 (only from E0+ extended cmds) inverts the copy. */
             {
                 uint8_t offset_byte = bus_read8(data_bank, src_pos++);
                 uint16_t ref_addr = buf_pos - offset_byte;
-                bool invert = (cmd & 0x20) != 0;
+                bool invert = (mode == 0xE0);
                 for (int i = 0; i < count; i++) {
                     uint8_t val = buf[ref_addr++];
                     buf[buf_pos++] = invert ? (val ^ 0xFF) : val;
@@ -176,22 +176,11 @@ void smk_84E09E(void) {
         }
     }
 
-    /* Now DMA the decompressed buffer to VRAM.
-     * Source is $7F:vram_dest, size is (buf_pos - vram_dest) bytes. */
+    /* Decompressor only writes to $7F WRAM buffer — DMA to VRAM is done
+     * separately by the caller (e.g. $85:8171 for tile data). */
     uint16_t decompressed_size = buf_pos - vram_dest;
-
-    bus_write8(0x80, 0x2115, 0x80);  /* VMAIN: word access, auto-increment */
-    bus_write8(0x80, 0x2116, vram_dest & 0xFF);
-    bus_write8(0x80, 0x2117, (vram_dest >> 8) & 0xFF);
-
-    bus_write8(0x80, 0x4310, 0x01);  /* ctrl: 2-byte word write, A-bus inc */
-    bus_write8(0x80, 0x4311, 0x18);  /* B-bus dest: $2118 (VRAM data) */
-    bus_write8(0x80, 0x4312, vram_dest & 0xFF);         /* src addr low */
-    bus_write8(0x80, 0x4313, (vram_dest >> 8) & 0xFF);  /* src addr high */
-    bus_write8(0x80, 0x4314, 0x7F);  /* src bank = $7F */
-    bus_write8(0x80, 0x4315, decompressed_size & 0xFF);
-    bus_write8(0x80, 0x4316, (decompressed_size >> 8) & 0xFF);
-    bus_write8(0x80, 0x420B, 0x02);  /* trigger DMA channel 1 */
+    printf("smk: decompress $%02X:%04X → $7F:%04X, size=%04X, end=$7F:%04X\n",
+           data_bank, data_ptr, vram_dest, decompressed_size, buf_pos);
 
     g_cpu.DB = saved_db;
 }
@@ -271,7 +260,6 @@ void smk_81E10A(void) {
     op_lda_imm16(0x00C7);
     op_ldx_imm16(0x0000);
     smk_84E09E();
-    printf("smk: title screen tiles loaded (VRAM $0000)\n");
 }
 
 /*
@@ -285,7 +273,14 @@ void smk_81E118(void) {
     op_lda_imm16(0x00C7);
     op_ldx_imm16(0xC000);
     smk_84E09E();
-    printf("smk: title screen tilemap loaded (VRAM $C000)\n");
+    {
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            int nz = 0;
+            for (int i = 0; i < 0x200; i++) if (wram[0x14000+i]) nz++;
+            printf("smk: tilemap loaded, $7F:4000 nonzero=%d\n", nz);
+        }
+    }
 }
 
 /*
@@ -299,7 +294,14 @@ void smk_81E584(void) {
     op_lda_imm16(0x00C4);
     op_ldx_imm16(0x8000);
     smk_84E09E();
-    printf("smk: title screen extra data loaded (VRAM $8000)\n");
+    {
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            int nz = 0;
+            for (int i = 0; i < 0x200; i++) if (wram[0x14000+i]) nz++;
+            printf("smk: extra loaded, $7F:4000 nonzero=%d\n", nz);
+        }
+    }
 }
 
 /*
@@ -556,11 +558,15 @@ void smk_858000(void) {
         /* Set CGRAM address to 0 */
         bus_write8(0x85, 0x2121, 0x00);
 
-        /* Load all 256 colors (512 bytes) from $7F:4000 to CGRAM */
+        /* Load 256 colors (512 bytes) from $7F:4000 to CGRAM.
+         * This is the palette data decompressed by $81:E10A. */
         if (wram) {
+            int nz = 0;
             for (int i = 0; i < 0x200; i++) {
+                if (wram[0x10000 + 0x4000 + i]) nz++;
                 bus_write8(0x85, 0x2122, wram[0x10000 + 0x4000 + i]);
             }
+            printf("smk: loaded CGRAM from $7F:4000 (%d/512 bytes nonzero)\n", nz);
         }
 
         /* REP #$30 */
@@ -651,11 +657,20 @@ void smk_81E0AD(void) {
      * Critical for visual output but has many sub-calls. Stub for now. */
     func_table_call(0x858000);
 
-    /* $85:8000 handles BGMODE, TM, palette, sprite tile loading.
-     * After it returns, set BGMODE and TM for the title screen since
-     * the $85:821C stub may not configure them fully yet. */
-    bus_write8(0x81, 0x2105, 0x01);  /* BGMODE: Mode 1, 8x8 tiles */
-    bus_write8(0x81, 0x212C, 0x17);  /* TM: BG1+BG2+BG3+OBJ on main screen */
+    /* $85:821C (display flags) is not yet recompiled. Apply the PPU register
+     * values that the title screen path at $85:8277 would set.
+     * Decoded from ROM bytes: A9 01 8D 05 21 A9 17 8D 2C 21 ... */
+    bus_write8(0x81, 0x2105, 0x09);  /* BGMODE: Mode 1, BG3 priority */
+    bus_write8(0x81, 0x212C, 0x14);  /* TM: BG3+OBJ (BG1/BG2 disabled — no tilemap data) */
+    /* PPU registers from $85:8277 (title screen display flags path).
+     * Title screen renders on BG3: tilemap at $1C00, tiles at $2000.
+     * BG1/BG2 tilemaps are empty (transparent). */
+    bus_write8(0x81, 0x2107, 0x10);  /* BG1SC: tilemap at VRAM $1000, 32x32 */
+    bus_write8(0x81, 0x2108, 0x15);  /* BG2SC: tilemap at VRAM $1400, 64x32 */
+    bus_write8(0x81, 0x2109, 0x1C);  /* BG3SC: tilemap at VRAM $1C00, 32x32 */
+    bus_write8(0x81, 0x210B, 0x00);  /* BG12NBA: BG1+BG2 tiles at $0000 */
+    bus_write8(0x81, 0x210C, 0x22);  /* BG34NBA: BG3+BG4 tiles at $2000 */
+    bus_write8(0x81, 0x2101, 0x02);  /* OBSEL: 8x8/16x16 sprites */
 
     /* Clear state vars */
     bus_wram_write16(0x0158, 0);

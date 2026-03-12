@@ -49,19 +49,6 @@ int main(int argc, char *argv[]) {
 
     /* === Main frame loop === */
     while (snesrecomp_begin_frame()) {
-        /*
-         * Frame structure (replaces the original NMI-driven loop):
-         *
-         * 1. Process NMI handler (what would run during VBlank)
-         *    - DMA transfers, brightness updates, state dispatch
-         *
-         * 2. Run one iteration of the main loop
-         *    - Frame setup / transition handling
-         *    - Game state handler dispatch
-         *
-         * 3. Render and present the frame
-         */
-
         /* Simulate NMI: set DP $44 so main loop doesn't spin */
         bus_wram_write16(g_cpu.DP + 0x44, 1);
 
@@ -73,6 +60,14 @@ int main(int argc, char *argv[]) {
 
         /* Render PPU and present */
         snesrecomp_end_frame();
+
+        {
+            static int fc = 0;
+            if (fc == 30) {
+                snesrecomp_dump_ppu("D:/recomp/snes/mk/ppu_state.log");
+            }
+            fc++;
+        }
     }
 
     printf("Shutting down...\n");

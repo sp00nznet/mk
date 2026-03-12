@@ -6,81 +6,85 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 ## Status
 
-### Milestone 1 — Foundation (Complete)
-- [x] CMake build system (MSVC 2022, vcpkg SDL2)
-- [x] 65816 CPU state struct with full register set and P flag helpers
-- [x] HiROM memory map with bank routing (ROM, WRAM, SRAM, I/O dispatch)
-- [x] HAL stubs for all SNES hardware (PPU, APU, DMA, DSP-1, CPU I/O)
-- [x] SDL2 platform layer (256x224 → 768x672 window, 60fps vsync, keyboard input)
-- [x] Hash-table function dispatch for recompiled game functions
-- [x] ROM loader with copier header detection and checksum validation
-- [x] ROM analysis tool (`tools/analyze/rom_info.py`)
+**26 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders with real SNES hardware via LakeSnes.
 
-### Milestone 2 — Emulator-Assisted Trace Pipeline (In Progress)
-- [x] Mesen2 Lua trace scripts (execution trace, function finder, HW register logger)
-- [x] Python trace parser (coverage analysis, function discovery, M/X flag mapping)
-- [x] C stub generator from trace data (per-bank source files, func_table registration)
-- [ ] Run full trace captures across game scenarios (boot, menus, race, Mode 7)
-- [ ] Build `cpu_ops.h` instruction helper macros from trace-verified patterns
-- [ ] Recompile boot chain: `$80FF70` → `$80803A` → `$81E000` → `$808056`
-- [ ] Wire first recompiled functions into main loop
+### What works
+- Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup
+- NMI handler with state dispatch, brightness fading, OAM DMA
+- Main loop with state machine (idle → init → title screen)
+- Custom tile/tilemap decompressor ($84:E09E) — all 7 compression modes + E0+ extended counts
+- Title screen transition: PPU register setup, VRAM tile/tilemap loading, palette decompression
+- Real palette data loaded from ROM → CGRAM (256 colors)
+- BG3 background pattern rendering with correct colors
+- LakeSnes PPU renders all 224 scanlines per frame
+- SDL2 window at 768×672 (3× scale), 60fps vsync, keyboard input
 
-### Future Milestones
-- Milestone 3 — Core game loop, NMI handler, display list processing
-- Milestone 4 — PPU rendering (Mode 1/7 backgrounds, OAM sprites, HDMA)
-- Milestone 5 — DSP-1 math coprocessor (track scaling, rotation, projection)
-- Milestone 6 — SPC700 audio engine
-- Milestone 7 — Full race gameplay, all tracks/characters
+### What's next
+- Sprite rendering (title logo, menu text — all rendered as OBJ sprites)
+- HDMA scroll effects (animated stripe background)
+- Title screen interactivity (menu selection, mode transitions)
+- Race screen (Mode 7, DSP-1 math, full gameplay)
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                  smk_launcher                    │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
-│  │ smk_     │  │ smk_hal  │  │ smk_platform  │  │
-│  │ runtime  │  │          │  │               │  │
-│  │          │  │ PPU stub │  │ SDL2 window   │  │
-│  │ CPU state│  │ APU stub │  │ SDL2 renderer │  │
-│  │ Memory   │  │ DMA xfer │  │ Keyboard→SNES │  │
-│  │ FuncTable│  │ DSP-1 ALU│  │ Frame sync    │  │
-│  │          │  │ CPU I/O  │  │               │  │
-│  └──────────┘  └──────────┘  └───────────────┘  │
-│                                                  │
+│                 smk_launcher                      │
 │  ┌──────────────────────────────────────────┐    │
-│  │ src/game/ — Recompiled 65816 functions   │    │
-│  │ (generated from Mesen2 trace analysis)   │    │
+│  │  src/recomp/ — 26 Recompiled functions   │    │
+│  │  smk_boot.c  — NMI, state machine, fade  │    │
+│  │  smk_init.c  — Init, transition dispatch │    │
+│  │  smk_title.c — Decompressor, PPU setup   │    │
+│  └──────────────────────────────────────────┘    │
+│                       │                           │
+│              bus_read8 / bus_write8               │
+│                       │                           │
+│  ┌──────────────────────────────────────────┐    │
+│  │  snesrecomp (ext/snesrecomp/)            │    │
+│  │  ┌────────────────────────────────────┐  │    │
+│  │  │  LakeSnes — Cycle-accurate SNES HW │  │    │
+│  │  │  Real PPU (Mode 0-7, sprites, etc) │  │    │
+│  │  │  Real SPC700 + DSP audio           │  │    │
+│  │  │  Real DMA (GPDMA + HDMA)           │  │    │
+│  │  │  Full memory bus routing            │  │    │
+│  │  └────────────────────────────────────┘  │    │
+│  │  SDL2 platform (window, audio, input)    │    │
 │  └──────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────┐
-│              Toolchain (Python)                   │
-│  tools/analyze/  — ROM header parser              │
-│  tools/mesen/    — Lua trace scripts + parsers    │
-│  tools/disasm/   — Disassembly tools (planned)    │
-│  tools/recomp/   — 65816→C recompiler (planned)   │
-└─────────────────────────────────────────────────┘
 ```
 
-## Emulator-Assisted Workflow
+Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus_write8(bank, addr, val)` which route through LakeSnes's real memory bus to the actual PPU, APU, DMA, and cartridge hardware. The PPU renders scanlines, the APU processes audio, and DMA transfers happen exactly as on real hardware.
 
-The recompilation pipeline uses **[Mesen2](https://github.com/SourMesen/Mesen2)** as a reference emulator to generate execution traces, discover function boundaries, and capture M/X flag state at every instruction. This approach was chosen because:
+## Recompiled Functions (26)
 
-1. **65816 is hard to statically disassemble** — the M/X processor flags change instruction operand sizes at runtime, making pure static analysis unreliable
-2. **Trace-verified recompilation** — every recompiled function can be validated against the emulator's known-good execution
-3. **Mesen2 has the right tools** — Lua scripting, headless `--testrunner` mode, Code/Data Logger, and customizable trace format
-
-### Pipeline
-
-```
-ROM → Mesen2 (Lua scripts) → Trace logs → Python parsers → C stubs + metadata
-                                                               ↓
-                                              Manual/assisted recompilation
-                                                               ↓
-                                                    Native C game code
-```
-
-See [`tools/mesen/SETUP.md`](tools/mesen/SETUP.md) for detailed setup and usage instructions.
+| Address | Function | Description |
+|---------|----------|-------------|
+| `$80:FF70` | `smk_80FF70` | Reset vector — boot entry point |
+| `$80:803A` | `smk_80803A` | Hardware init (PPU, APU, WRAM, DMA) |
+| `$80:8056` | `smk_808056` | Main loop (state dispatch) |
+| `$80:8000` | `smk_808000` | NMI handler (OAM DMA, scroll, brightness) |
+| `$80:B181` | `smk_80B181` | Brightness fade in/out |
+| `$80:946E` | `smk_80946E` | OAM DMA transfer (WRAM → PPU) |
+| `$80:81B5` | `smk_8081B5` | NMI cleanup (audio, input) |
+| `$80:8067` | `smk_808067` | State $02 handler (init trigger) |
+| `$80:80BA` | `smk_8080BA` | State $04 handler (title screen loop) |
+| `$80:8096` | `smk_808096` | Null state handler (states $00/$1A) |
+| `$80:81DD` | `smk_8081DD` | NMI state $00/$1A (wake main loop) |
+| `$80:8237` | `smk_808237` | NMI state $04 (title screen NMI) |
+| `$80:8BEA` | `smk_808BEA` | PPU register init + font tile DMA |
+| `$81:E000` | `smk_81E000` | Full init (WRAM clear, PPU, DSP-1, state vars) |
+| `$81:E067` | `smk_81E067` | Transition dispatch (indexed by DP $32) |
+| `$81:E0AD` | `smk_81E0AD` | Title screen transition |
+| `$81:E50D` | `smk_81E50D` | Title PPU register setup |
+| `$81:E10A` | `smk_81E10A` | Tile data decompression |
+| `$81:E118` | `smk_81E118` | Tilemap decompression |
+| `$81:E584` | `smk_81E584` | Additional data decompression |
+| `$81:E933` | `smk_81E933` | VRAM DMA transfers |
+| `$84:E09E` | `smk_84E09E` | Custom decompressor (7 modes + E0+ extended) |
+| `$84:F38C` | `smk_84F38C` | PPU/display reset |
+| `$84:FCF1` | `smk_84FCF1` | SRAM checksum validation |
+| `$85:8000` | `smk_858000` | Sprite/palette/OAM setup |
+| `$85:809B` | `smk_85809B` | BG scroll + HDMA trigger |
 
 ## Building
 
@@ -88,8 +92,7 @@ See [`tools/mesen/SETUP.md`](tools/mesen/SETUP.md) for detailed setup and usage 
 - CMake 3.16+
 - Visual Studio 2022 (MSVC)
 - SDL2 via vcpkg: `vcpkg install sdl2:x64-windows`
-- Python 3.10+ (for toolchain scripts)
-- Mesen2 (for trace capture, [download](https://github.com/SourMesen/Mesen2/releases))
+- Python 3.10+ (for disassembler and analysis tools)
 
 ### Build
 
@@ -108,6 +111,35 @@ build/Debug/smk_launcher.exe "Super Mario Kart (USA).sfc"
 
 The ROM file is not included — supply your own US v1.0 copy (MD5: `7f25ce5a283d902694c52fb1152fa61a`).
 
+## Decompressor
+
+The custom decompressor at `$84:E09E` handles SMK's tile/tilemap compression format:
+
+| Mode | Encoding | Description |
+|------|----------|-------------|
+| `$00` | Raw | Copy N bytes from stream |
+| `$20` | RLE | Repeat 1 byte N times |
+| `$40` | Word fill | Alternate 2 bytes for N entries |
+| `$60` | Inc fill | Store incrementing byte N times |
+| `$80` | Backref | Copy from earlier in buffer (abs offset + base) |
+| `$A0` | Inv backref | Copy with XOR $FF (inverted) |
+| `$C0` | Byte backref | Copy from buf_pos - offset (1-byte offset) |
+
+Commands `$E0`–`$FE` use extended 10-bit counts: 1 data byte + cmd bits 0-1 as high bits.
+
+## Project Structure
+
+```
+├── include/smk/       cpu_ops.h (65816 instruction helpers), functions.h
+├── src/
+│   ├── recomp/        Recompiled game functions (smk_boot.c, smk_init.c, smk_title.c)
+│   └── main/          main.c — entry point, frame loop
+├── ext/snesrecomp/    snesrecomp library (LakeSnes backend + SDL2 platform)
+└── tools/
+    ├── disasm/        65816 disassembler (M/X flag tracking, all addressing modes)
+    └── mesen/         Mesen2 trace scripts + parsers
+```
+
 ## ROM Details
 
 | Field | Value |
@@ -122,36 +154,13 @@ The ROM file is not included — supply your own US v1.0 copy (MD5: `7f25ce5a283
 | Region | USA |
 | CRC32 | CD80DB86 |
 
-## Project Structure
-
-```
-├── include/
-│   ├── recomp/      cpu.h, memory.h, func_table.h
-│   ├── hal/         ppu.h, apu.h, dma.h, dsp1.h, io.h
-│   ├── platform/    sdl_backend.h, input.h
-│   └── game/        (generated function declarations)
-├── src/
-│   ├── recomp/      CPU reset, HiROM memory routing, func dispatch
-│   ├── hal/         HAL stubs (register storage, basic DMA, ALU math)
-│   ├── platform/    SDL2 window/renderer, keyboard→joypad mapping
-│   ├── game/        (recompiled 65816 functions, per-bank .c files)
-│   └── main/        main.c — init, main loop, shutdown
-├── tools/
-│   ├── analyze/     rom_info.py — ROM header parser + checksum validator
-│   ├── mesen/       Lua trace scripts + Python parsers
-│   ├── disasm/      (planned) disassembly tools
-│   └── recomp/      (planned) 65816→C recompiler
-└── docs/            (planned) technical documentation
-```
-
 ## Key References
 
 - [Yoshifanatic1/Super-Mario-Kart-Disassembly](https://github.com/Yoshifanatic1/Super-Mario-Kart-Disassembly) — Full 65816 + SPC700 disassembly (Asar)
 - [jvipond/super_mario_kart_disassembly](https://github.com/jvipond/super_mario_kart_disassembly) — Trace-based disassembly with Python tooling
 - [jvipond/super_mario_kart_recompilation](https://github.com/jvipond/super_mario_kart_recompilation) — Prior LLVM-based recomp attempt
 - [MrL314/smk-spc700-disassembly](https://github.com/MrL314/smk-spc700-disassembly) — SPC700 audio driver disassembly
-- [Mesen2](https://github.com/SourMesen/Mesen2) — SNES emulator with trace logging and Lua scripting
-- [SNESRecomp](https://github.com/blueberry077/SNESRecomp) — Experimental trace-based SNES recompiler (reference)
+- [LakeSnes](https://github.com/elzo-d/LakeSnes) — Cycle-accurate SNES emulator in C (hardware backend)
 
 ## License
 
