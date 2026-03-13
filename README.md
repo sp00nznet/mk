@@ -8,7 +8,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 **28 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders BG layers + palettes with real SNES hardware via LakeSnes.
 
-![Title Screen](title.png)
+![Title Screen](titlescreen.gif)
 
 ### What works
 - Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup
