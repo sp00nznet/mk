@@ -6,7 +6,9 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 ## Status
 
-**26 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders with real SNES hardware via LakeSnes.
+**28 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders BG layers + palettes with real SNES hardware via LakeSnes.
+
+![Title Screen](title.png)
 
 ### What works
 - Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup
@@ -15,12 +17,13 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 - Custom tile/tilemap decompressor ($84:E09E) — all 7 compression modes + E0+ extended counts
 - Title screen transition: PPU register setup, VRAM tile/tilemap loading, palette decompression
 - Real palette data loaded from ROM → CGRAM (256 colors)
-- BG3 background pattern rendering with correct colors
+- All 3 BG layers rendering correctly (Mode 1: title banner, hills, text)
+- Sprite tile DMA to VRAM (2bpp→4bpp interleave + block transfers)
 - LakeSnes PPU renders all 224 scanlines per frame
 - SDL2 window at 768×672 (3× scale), 60fps vsync, keyboard input
 
 ### What's next
-- Sprite rendering (title logo, menu text — all rendered as OBJ sprites)
+- Sprite animation system (title screen character karts — complex multi-slot state machine)
 - HDMA scroll effects (animated stripe background)
 - Title screen interactivity (menu selection, mode transitions)
 - Race screen (Mode 7, DSP-1 math, full gameplay)
@@ -55,7 +58,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus_write8(bank, addr, val)` which route through LakeSnes's real memory bus to the actual PPU, APU, DMA, and cartridge hardware. The PPU renders scanlines, the APU processes audio, and DMA transfers happen exactly as on real hardware.
 
-## Recompiled Functions (26)
+## Recompiled Functions (28)
 
 | Address | Function | Description |
 |---------|----------|-------------|
@@ -79,11 +82,13 @@ Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus
 | `$81:E10A` | `smk_81E10A` | Tile data decompression |
 | `$81:E118` | `smk_81E118` | Tilemap decompression |
 | `$81:E584` | `smk_81E584` | Additional data decompression |
+| `$81:E576` | `smk_81E576` | Sprite tile decompression + 2bpp→4bpp interleave |
 | `$81:E933` | `smk_81E933` | VRAM DMA transfers |
 | `$84:E09E` | `smk_84E09E` | Custom decompressor (7 modes + E0+ extended) |
 | `$84:F38C` | `smk_84F38C` | PPU/display reset |
 | `$84:FCF1` | `smk_84FCF1` | SRAM checksum validation |
 | `$85:8000` | `smk_858000` | Sprite/palette/OAM setup |
+| `$85:8045` | `smk_858045` | Per-frame sprite update |
 | `$85:809B` | `smk_85809B` | BG scroll + HDMA trigger |
 
 ## Building

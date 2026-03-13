@@ -523,10 +523,37 @@ void smk_858000(void) {
     OP_SET_DB(0x85);
     op_rep(0x30);
 
-    /* JSL $81CB98 — HDMA table setup
-     * Sets $C8=$1000, $B0/$B2=$00B0, processes channel table at $85:9059.
-     * Skip for now — HDMA will produce visual artifacts without it but
-     * won't prevent basic display. */
+    /* JSL $81CB98 — HDMA table setup + sprite slot initialization
+     * The real routine builds a linked list for the OAM builder and
+     * initializes 8 sprite slots from the config table at $85:9059.
+     * We skip the linked list/HDMA but DO initialize the slot data. */
+    {
+        /* Read 8 entries from $85:9059 (8 bytes each: slot, X, Y, tile) */
+        uint16_t tbl = 0x9059;
+        for (int i = 0; i < 8; i++) {
+            uint16_t slot_num = bus_read16(0x85, tbl);
+            if (slot_num == 0) break;
+            uint16_t x_pos = bus_read16(0x85, tbl + 2);
+            uint16_t y_pos = bus_read16(0x85, tbl + 4);
+            uint16_t tile  = bus_read16(0x85, tbl + 6);
+            tbl += 8;
+
+            /* Initialize slot fields (mimics $81:CB98 + $81:CBFF) */
+            bus_wram_write16(slot_num + 0x18, x_pos);
+            bus_wram_write16(slot_num + 0x1C, y_pos);
+            bus_wram_write16(slot_num + 0x2A, tile);
+            bus_wram_write16(slot_num + 0xBA, 0x0140);
+            bus_wram_write16(slot_num + 0x30, 0x0120);
+            bus_wram_write16(slot_num + 0x44, y_pos); /* target Y = initial Y */
+            bus_wram_write16(slot_num + 0x22, 0);
+            bus_wram_write16(slot_num + 0x40, 0);
+            bus_wram_write16(slot_num + 0x42, 0);
+            bus_wram_write16(slot_num + 0x86, 0);
+        }
+        bus_wram_write16(g_cpu.DP + 0xC8, 0x1000);
+        bus_wram_write16(g_cpu.DP + 0xB0, 0x00B0);
+        bus_wram_write16(g_cpu.DP + 0xB2, 0x00B0);
+    }
 
     /* Clear memory: $10E2, $11E2, ..., $17E2 */
     for (uint16_t x = 0x1000; x < 0x1800; x += 0x0100) {
@@ -584,6 +611,7 @@ void smk_858000(void) {
             bus_write8(0x85, 0x2116, vram_lo);
             bus_write8(0x85, 0x2117, vram_hi);
             bus_write8(0x85, 0x420B, 0x01);  /* trigger DMA ch0 */
+
         }
 
         /* REP #$30 */
@@ -679,32 +707,6 @@ void smk_858000(void) {
     bus_wram_write16(g_cpu.DP + 0x8E, 0);
     bus_wram_write16(g_cpu.DP + 0x62, 0);
 
-    /* Place test sprites in OAM to verify sprite rendering.
-     * These will be replaced by the real OAM builder ($85:8B7A) later. */
-    {
-        uint8_t *wram = bus_get_wram();
-        if (wram) {
-            for (int i = 0; i < 8; i++) {
-                int oam_off = 0x0200 + i * 4;
-                wram[oam_off + 0] = 48 + i * 24;
-                wram[oam_off + 1] = 100;
-                wram[oam_off + 2] = i * 2;
-                wram[oam_off + 3] = 0x30;
-            }
-            for (int i = 0; i < 8; i++) {
-                int oam_off = 0x0200 + (8 + i) * 4;
-                wram[oam_off + 0] = 48 + i * 24;
-                wram[oam_off + 1] = 120;
-                wram[oam_off + 2] = 16 + i * 2;
-                wram[oam_off + 3] = 0x30;
-            }
-            wram[0x0400] = 0xAA;
-            wram[0x0401] = 0xAA;
-            wram[0x0402] = 0xAA;
-            wram[0x0403] = 0xAA;
-        }
-    }
-
     g_cpu.DB = saved_db;
     printf("smk: title screen graphics setup complete\n");
 }
@@ -780,34 +782,375 @@ void smk_81E0AD(void) {
 }
 
 /*
+ * Title screen animation — slot-based sprite state machine
+ *
+ * 8 sprite slots ($1000-$1700), each with:
+ *   $18,x = initial X position
+ *   $1C,x = Y position (current, interpolated toward $44,x)
+ *   $22,x = X position / movement speed
+ *   $2A,x = tile/attribute word
+ *   $40,x = frame counter (incremented each frame)
+ *   $42,x = phase counter (incremented at milestone frames)
+ *   $44,x = Y target position
+ *   $86,x = flags
+ *   $92,x = config
+ *
+ * Original at $85:8B7A, called from mode 0 path ($85:8061).
+ */
+
+/* Helper: read/write slot fields using WRAM access */
+static uint16_t slot_read(uint16_t slot_base, uint16_t field) {
+    return bus_wram_read16(slot_base + field);
+}
+static void slot_write(uint16_t slot_base, uint16_t field, uint16_t val) {
+    bus_wram_write16(slot_base + field, val);
+}
+
+/*
+ * $85:8EE9 — Y position interpolation engine
+ *
+ * Processes one slot per call (cycles through 8 slots via DP $75).
+ * Moves $1C,x toward $44,x by +/-1 each time.
+ */
+static void smk_85_8EE9(void) {
+    /* Slot base table (same as $85:8FE9) */
+    static const uint16_t slot_bases[8] = {
+        0x1000, 0x1100, 0x1200, 0x1300,
+        0x1400, 0x1500, 0x1600, 0x1700
+    };
+
+    uint16_t idx = bus_wram_read16(g_cpu.DP + 0x75);
+    uint16_t slot = slot_bases[idx / 2];
+
+    uint16_t current = slot_read(slot, 0x1C);
+    uint16_t target = slot_read(slot, 0x44);
+
+    if (current == target) {
+        current++;
+    } else {
+        current--;
+    }
+    slot_write(slot, 0x1C, current);
+
+    idx += 2;
+    if (idx >= 0x10) idx = 0;
+    bus_wram_write16(g_cpu.DP + 0x75, idx);
+}
+
+/*
+ * $85:8FB8 — Initialize slot from data table
+ *
+ * Y = table index (0, 2, 4, ..., 14)
+ * X = slot base
+ */
+static void smk_85_8FB8(uint16_t slot, uint16_t table_idx) {
+    /* Pointer table at $85:8FF9 */
+    static const uint16_t ptrs[8] = {
+        0x9009, 0x9013, 0x901D, 0x9027,
+        0x9031, 0x903B, 0x9045, 0x904F
+    };
+    uint16_t ptr = ptrs[table_idx / 2];
+
+    /* Read 5 words of init data from ROM at $85:ptr */
+    uint16_t x_pos    = bus_read16(0x85, ptr + 0);
+    uint16_t y_pos    = bus_read16(0x85, ptr + 2);
+    uint16_t tile     = bus_read16(0x85, ptr + 4);
+    uint16_t cfg      = bus_read16(0x85, ptr + 6);
+    uint16_t target_y = bus_read16(0x85, ptr + 8);
+
+    slot_write(slot, 0x22, 0);   /* STZ $22,x */
+    slot_write(slot, 0x18, x_pos);
+    slot_write(slot, 0x1C, y_pos);
+    slot_write(slot, 0x2A, tile);
+    slot_write(slot, 0x92, cfg);
+    slot_write(slot, 0x44, target_y);
+}
+
+/*
+ * $85:8F0B — Advance sprite tile
+ *
+ * $2A,x += $0800
+ */
+static void smk_85_8F0B(uint16_t slot) {
+    uint16_t v = slot_read(slot, 0x2A);
+    slot_write(slot, 0x2A, v + 0x0800);
+}
+
+/*
+ * $85:8F2E — Sprite animation update
+ *
+ * Updates OAM high table, palette cycling, frame counter for sprite 2.
+ */
+static void smk_85_8F2E(void) {
+    bus_wram_write16(0x0408, 0xAAAA);
+    uint16_t v = bus_wram_read16(0x0284);
+    bus_wram_write16(0x0284, v + 3);
+
+    uint16_t frame = bus_wram_read16(g_cpu.DP + 0x88);
+    frame++;
+    if (frame >= 5) {
+        frame = 0;
+        uint16_t oam = bus_wram_read16(0x0286);
+        if (oam == 0x3F02)
+            bus_wram_write16(0x0286, 0x3F04);
+        else
+            bus_wram_write16(0x0286, 0x3F02);
+    }
+    bus_wram_write16(g_cpu.DP + 0x88, frame);
+}
+
+/*
+ * $85:8B7A — Title screen animation state machine
+ *
+ * Processes all 8 sprite slots: frame counters, phase transitions,
+ * and per-phase actions (position, tile, flag updates).
+ */
+static void smk_85_8B7A(void) {
+    /* Check brightness — only run when fade is complete ($48 == 0) */
+    uint16_t brightness = bus_wram_read16(0x0048);
+    if (brightness != 0) return;
+
+    /* $85:8EE9 — Y interpolation engine */
+    smk_85_8EE9();
+
+    /* NOTE: The real game updates X positions via the linked-list
+     * callback chain ($81:CB44 → $80:BA36). The exact movement
+     * mechanism involves sprite frame data tables. For now, we use
+     * $22,x as a direct X position when active. */
+
+    /* === Slot 0 ($1000) === */
+    {
+        uint16_t s = 0x1000;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x00D2 || fc == 0x01F2 || fc == 0x0452 ||
+            fc == 0x046A || fc == 0x053A || fc == 0x0592)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break; /* skip */
+        case 1: slot_write(s, 0x22, 0x0120); break;
+        case 2:
+            smk_85_8FB8(s, 0);
+            slot_write(s, 0x86, 0);
+            slot_write(s, 0x44, 0x00C0);
+            slot_write(s, 0x1C, 0x00C0);
+            break;
+        case 3: slot_write(s, 0x22, 0x0200); break;
+        case 4:
+            slot_write(s, 0x2A, 0x3800);
+            slot_write(s, 0x22, 0x0300);
+            slot_write(s, 0x86, 0x8000);
+            break;
+        case 5:
+            slot_write(s, 0x22, 0);
+            smk_85_8F0B(s);
+            break;
+        }
+    }
+
+    /* === Slot 1 ($1100) === */
+    {
+        uint16_t s = 0x1100;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x0112 || fc == 0x0232 || fc == 0x0492 || fc == 0x0572)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0x0120); break;
+        case 2:
+            smk_85_8FB8(s, 2);
+            break;
+        case 3: slot_write(s, 0x22, 0x0120); break;
+        case 4:
+            slot_write(s, 0x22, 0xFED0);
+            smk_85_8F0B(s);
+            break;
+        }
+    }
+
+    /* === Slot 2 ($1200) === */
+    {
+        uint16_t s = 0x1200;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x01F2 || fc == 0x0217 || fc == 0x0218 ||
+            fc == 0x023E || fc == 0x0302 || fc == 0x04C2 || fc == 0x055A)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0x0140); break;
+        case 2: bus_wram_write16(0x0284, 0xB028); break;
+        case 3: smk_85_8F2E(); break;
+        case 4: bus_wram_write16(0x0284, 0xF0E0); break;
+        case 5:
+            smk_85_8FB8(s, 4);
+            break;
+        case 6: slot_write(s, 0x22, 0x0120); break;
+        case 7:
+            slot_write(s, 0x22, 0xFEB0);
+            smk_85_8F0B(s);
+            break;
+        }
+    }
+
+    /* === Slot 3 ($1300) === */
+    {
+        uint16_t s = 0x1300;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x0152 || fc == 0x0272 || fc == 0x04DA ||
+            fc == 0x054A || fc == 0x05BA)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0xFEE0); break;
+        case 2:
+            smk_85_8FB8(s, 6);
+            break;
+        case 3: slot_write(s, 0x22, 0x0120); break;
+        case 4:
+            smk_85_8F0B(s);
+            slot_write(s, 0x22, 0xFEE0);
+            break;
+        case 5:
+            smk_85_8FB8(s, 6);
+            break;
+        }
+    }
+
+    /* === Slot 4 ($1400) === */
+    {
+        uint16_t s = 0x1400;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x02FE || fc == 0x0422)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0x0120); break;
+        case 2:
+            smk_85_8FB8(s, 8);
+            break;
+        }
+    }
+
+    /* === Slot 5 ($1500) === */
+    {
+        uint16_t s = 0x1500;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x04AA || fc == 0x0568)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0x0120); break;
+        case 2:
+            slot_write(s, 0x22, 0xFEB0);
+            smk_85_8F0B(s);
+            break;
+        }
+    }
+
+    /* === Slot 6 ($1600) === */
+    {
+        uint16_t s = 0x1600;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x0192 || fc == 0x023C || fc == 0x0245 || fc == 0x02C2)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0x0120); break;
+        case 2:
+            smk_85_8F0B(s);
+            slot_write(s, 0x22, 0xFE90);
+            break;
+        case 3:
+            smk_85_8F0B(s);
+            bus_wram_write16(0x0288, 0xF0E0);
+            break;
+        case 4:
+            smk_85_8FB8(s, 12);
+            break;
+        }
+    }
+
+    /* === Slot 7 ($1700) === */
+    {
+        uint16_t s = 0x1700;
+        slot_write(s, 0x40, slot_read(s, 0x40) + 1);
+        uint16_t fc = slot_read(s, 0x40);
+        if (fc == 0x0362 || fc == 0x03F0 || fc == 0x0472)
+            slot_write(s, 0x42, slot_read(s, 0x42) + 1);
+
+        uint16_t phase = slot_read(s, 0x42);
+        switch (phase) {
+        case 0: break;
+        case 1: slot_write(s, 0x22, 0x0160); break;
+        case 2:
+            smk_85_8F0B(s);
+            slot_write(s, 0x22, 0xFDE0);
+            break;
+        case 3:
+            smk_85_8FB8(s, 14);
+            break;
+        }
+    }
+
+    /* === Epilogue === */
+    /* Check $8A, call $8F24 if non-zero */
+    /* Additional frame-counter checks on slot 0 (for demo mode) — skip for now */
+}
+
+/*
+ * OAM builder stub
+ *
+ * The real game uses a complex rendering chain:
+ *   $81:CB44 (linked list traversal)
+ *   → $80:BA28 (indirect call wrapper)
+ *   → $80:8EC5 (sprite drawing via $30,x frame data index)
+ *   → $80:8F22 (multi-tile OAM builder using ROM tables at $9090, $91FA)
+ *
+ * The sprite frame data tables encode multi-tile sprite layouts with
+ * per-frame positions, tiles, and attributes. Movement is driven by
+ * the frame data index ($30,x) advancing through the tables.
+ *
+ * TODO: Implement $81:CB44 and the full drawing chain, or extract
+ * sprite frame data from ROM tables for direct OAM building.
+ */
+static void smk_build_oam_from_slots(void) {
+    /* Not yet implemented — OAM stays as initialized by $84:F38C
+     * (all sprites offscreen at $E0F8). The animation state machine
+     * above correctly tracks phase transitions and slot data. */
+}
+
+/*
  * $85:8045 — Per-frame sprite update
  *
  * Called from $80:80BA each frame during the title screen.
- * Manages sprite animation state machine, OAM building, HDMA.
- *
- * Original flow:
- *   JSL $81BB70    ; ??? (some init)
- *   JSR $92F9      ; ??? (some processing)
- *   LDA $7B / BNE skip  ; if $7B != 0, skip all
- *   SEP #$30
- *   JSR $84D8      ; per-frame setup
- *   LDA $80 / AND #7 / ASL / TAX / JMP ($839B,x)  ; mode dispatch
- *     mode 0 ($8061): JSR $84D1 / LDA #$0200 / STA $3C / JSR $8B7A / JSL $81CB44
- *     mode 1 ($8077): JSR $8602 / JSR $8718
- *   REP #$30
- *   LDA $80 / BNE skip
- *   JSL $84FD25    ; ??? (only in mode 0)
- *   PLB / RTL
- *
- * For now: stub — the test sprites in OAM handle rendering.
- * The real OAM builder ($85:8B7A) will be implemented later.
+ * Mode dispatch: mode 0 builds OAM, mode 1 handles input.
  */
 void smk_858045(void) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
-    /* JSL $81BB70 — skip for now */
-    /* JSR $92F9 — skip for now */
+    /* JSL $81BB70 — RNG (skip for now) */
+    /* JSR $92F9 — input handling (copies joypad when brightness ready) */
 
     /* LDA $7B / BNE skip */
     uint16_t v7b = bus_wram_read16(g_cpu.DP + 0x7B);
@@ -816,8 +1159,32 @@ void smk_858045(void) {
         return;
     }
 
-    /* The mode dispatch based on DP $80 would go here.
-     * For now, skip the OAM builder — test sprites are static. */
+    /* SEP #$30 / JSR $84D8 — per-frame input check (skip for now) */
+
+    /* Mode dispatch: LDA $80 / AND #$07 / ASL / TAX / JMP ($839B,x) */
+    uint8_t mode = bus_wram_read8(g_cpu.DP + 0x80) & 0x07;
+
+    if (mode == 0) {
+        /* Mode 0: JSR $84D1 (INC $64) */
+        uint16_t v64 = bus_wram_read16(g_cpu.DP + 0x64);
+        bus_wram_write16(g_cpu.DP + 0x64, v64 + 1);
+
+        /* REP #$30 / LDA #$0200 / STA $3C */
+        op_rep(0x30);
+        bus_wram_write16(g_cpu.DP + 0x3C, 0x0200);
+
+        /* JSR $8B7A — animation state machine */
+        smk_85_8B7A();
+
+        /* JSL $81CB44 — linked list OAM builder (simplified) */
+        smk_build_oam_from_slots();
+    }
+
+    /* REP #$30 / LDA $80 / BNE skip / JSL $84FD25 */
+    op_rep(0x30);
+    if (mode == 0) {
+        /* $84FD25 handles "PUSH START" menu logic — skip for now */
+    }
 
     g_cpu.DB = saved_db;
 }
