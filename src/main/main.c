@@ -65,10 +65,10 @@ int main(int argc, char *argv[]) {
 
         {
             static int fc = 0;
+            fc++;
             if (fc == 535) {
                 snesrecomp_dump_ppu("D:/recomp/snes/mk/ppu_state.log");
             }
-            fc++;
         }
     }
 
