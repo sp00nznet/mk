@@ -333,8 +333,10 @@ void smk_register_all(void) {
     func_table_register(0x84E09E, smk_84E09E);  /* VRAM data loader */
     func_table_register(0x84F38C, smk_84F38C);  /* PPU reset */
     func_table_register(0x84FCF1, smk_84FCF1);  /* SRAM checksum */
+    func_table_register(0x84FD25, smk_84FD25);  /* PUSH START text */
     func_table_register(0x858000, smk_858000);  /* title gfx setup */
     func_table_register(0x858045, smk_858045);  /* per-frame sprite update */
+    func_table_register(0x81CB35, smk_81CB35);  /* NMI sprite tile DMA (stub) */
 
-    printf("smk: registered %d recompiled functions\n", 28);
+    printf("smk: registered %d recompiled functions\n", 30);
 }

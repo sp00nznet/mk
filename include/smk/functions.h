@@ -33,6 +33,7 @@ void smk_85809B(void);  /* BG scroll + HDMA trigger */
 void smk_84E09E(void);  /* VRAM data loader (data-driven DMA) */
 void smk_84F38C(void);  /* PPU/display full reset */
 void smk_84FCF1(void);  /* SRAM checksum validation */
+void smk_84FD25(void);  /* "PUSH START" text blink + menu */
 
 /* === Bank $81 === */
 void smk_81E000(void);  /* Full initialization */
@@ -45,5 +46,6 @@ void smk_81E118(void);  /* Load title screen tilemap to VRAM */
 void smk_81E584(void);  /* Load title screen palette data */
 void smk_81E933(void);  /* Title screen VRAM DMA transfers */
 void smk_81E576(void);  /* Sprite tile decompression + 2bpp→4bpp interleave */
+void smk_81CB35(void);  /* NMI sprite tile DMA (stub) */
 
 #endif /* SMK_FUNCTIONS_H */

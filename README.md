@@ -6,7 +6,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 ## Status
 
-**28 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders BG layers + palettes with real SNES hardware via LakeSnes.
+**30 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders BG layers, sprites, and palettes with real SNES hardware via LakeSnes.
 
 ![Title Screen](titlescreen.gif)
 
@@ -18,14 +18,17 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 - Title screen transition: PPU register setup, VRAM tile/tilemap loading, palette decompression
 - Real palette data loaded from ROM → CGRAM (256 colors)
 - All 3 BG layers rendering correctly (Mode 1: title banner, hills, text)
-- Sprite tile DMA to VRAM (2bpp→4bpp interleave + block transfers)
+- Sprite tile DMA pipeline: per-frame staging buffer → NMI DMA consumer → VRAM
+- 8-slot sprite animation state machine with Y interpolation and phase milestones
+- OAM builder: sprite slots → screen coords → OAM entries with proper tile/attr/priority
+- Per-frame sprite tile DMA from ROM (frame data → staging buffer → NMI transfer)
+- SRAM checksum validation and save data erase menu (button-gated, matching original logic)
 - LakeSnes PPU renders all 224 scanlines per frame
 - SDL2 window at 768×672 (3× scale), 60fps vsync, keyboard input
 
 ### What's next
-- Sprite animation system (title screen character karts — complex multi-slot state machine)
 - HDMA scroll effects (animated stripe background)
-- Title screen interactivity (menu selection, mode transitions)
+- Joypad input wiring (menu selection, mode transitions)
 - Race screen (Mode 7, DSP-1 math, full gameplay)
 
 ## Architecture
@@ -34,7 +37,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 ┌─────────────────────────────────────────────────┐
 │                 smk_launcher                      │
 │  ┌──────────────────────────────────────────┐    │
-│  │  src/recomp/ — 26 Recompiled functions   │    │
+│  │  src/recomp/ — 30 Recompiled functions   │    │
 │  │  smk_boot.c  — NMI, state machine, fade  │    │
 │  │  smk_init.c  — Init, transition dispatch │    │
 │  │  smk_title.c — Decompressor, PPU setup   │    │
@@ -58,7 +61,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus_write8(bank, addr, val)` which route through LakeSnes's real memory bus to the actual PPU, APU, DMA, and cartridge hardware. The PPU renders scanlines, the APU processes audio, and DMA transfers happen exactly as on real hardware.
 
-## Recompiled Functions (28)
+## Recompiled Functions (30)
 
 | Address | Function | Description |
 |---------|----------|-------------|
@@ -75,6 +78,7 @@ Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus
 | `$80:81DD` | `smk_8081DD` | NMI state $00/$1A (wake main loop) |
 | `$80:8237` | `smk_808237` | NMI state $04 (title screen NMI) |
 | `$80:8BEA` | `smk_808BEA` | PPU register init + font tile DMA |
+| `$81:CB35` | `smk_81CB35` | NMI sprite tile DMA consumer |
 | `$81:E000` | `smk_81E000` | Full init (WRAM clear, PPU, DSP-1, state vars) |
 | `$81:E067` | `smk_81E067` | Transition dispatch (indexed by DP $32) |
 | `$81:E0AD` | `smk_81E0AD` | Title screen transition |
@@ -87,8 +91,9 @@ Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus
 | `$84:E09E` | `smk_84E09E` | Custom decompressor (7 modes + E0+ extended) |
 | `$84:F38C` | `smk_84F38C` | PPU/display reset |
 | `$84:FCF1` | `smk_84FCF1` | SRAM checksum validation |
-| `$85:8000` | `smk_858000` | Sprite/palette/OAM setup |
-| `$85:8045` | `smk_858045` | Per-frame sprite update |
+| `$84:FD25` | `smk_84FD25` | Save data erase menu handler |
+| `$85:8000` | `smk_858000` | Sprite/palette/OAM setup + slot init |
+| `$85:8045` | `smk_858045` | Per-frame sprite update (animation + OAM) |
 | `$85:809B` | `smk_85809B` | BG scroll + HDMA trigger |
 
 ## Building

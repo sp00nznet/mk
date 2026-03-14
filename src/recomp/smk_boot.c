@@ -444,3 +444,72 @@ void smk_8081B5(void) {
     /* JSR $843C — controller/input (handled by snesrecomp input layer) */
     /* JSR $9EB2 — misc processing (stub) */
 }
+
+/*
+ * $81:CB35 → $80:BA28 → $80:8E01 — NMI sprite tile DMA
+ *
+ * Processes the staging buffer at $0EA0 (built by the main-loop OAM builder).
+ * Each 6-byte entry: VRAM dest (2), source addr (2), bank (1), size (1).
+ * Entries are processed in reverse order, then $4A is cleared.
+ *
+ * Original $80:8E01:
+ *   SEP #$30 / set DMA ch0 mode=$01 dest=$18 / VMAIN=$80
+ *   loop (X=$4A downto 6, step -6):
+ *     read entry at $0E9A+X → set VRAM addr, source, bank, size
+ *     trigger DMA ch0
+ *   STZ $4A
+ */
+void smk_81CB35(void) {
+    /* INC $0D1A (frame counter for CB35 calls) */
+    uint16_t cnt = bus_wram_read16(0x0D1A);
+    bus_wram_write16(0x0D1A, cnt + 1);
+
+    /* Process $0EA0 staging buffer via $80:8E01 logic */
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+
+    uint8_t buf_idx = wram[0x004A];  /* DP $4A = buffer write index */
+    if (buf_idx == 0) return;  /* nothing staged */
+
+    /* Set up DMA: mode=$01 (2-reg sequential), B-bus=$18 (VMDATAL) */
+    /* VMAIN=$80 (word access, increment after high byte write) */
+    bus_write8(0x00, 0x2115, 0x80);
+
+    /* Process entries in reverse: X from $4A down to 6, step -6 */
+    int x = buf_idx;
+    while (x > 0) {
+        /* Entry at $0E9A + X = $0EA0 + (X - 6) when X counts from $4A */
+        uint8_t vram_lo  = wram[0x0E9A + x + 0];
+        uint8_t vram_hi  = wram[0x0E9A + x + 1];
+        uint8_t src_lo   = wram[0x0E9A + x + 2];
+        uint8_t src_hi   = wram[0x0E9A + x + 3];
+        uint8_t src_bank = wram[0x0E9A + x + 4];
+        uint8_t size_lo  = wram[0x0E9A + x + 5];
+
+        /* Set VRAM address */
+        bus_write8(0x00, 0x2116, vram_lo);
+        bus_write8(0x00, 0x2117, vram_hi);
+
+        /* Set DMA channel 0: ctrl=$01, dest=$18 */
+        bus_write8(0x00, 0x4300, 0x01);
+        bus_write8(0x00, 0x4301, 0x18);
+
+        /* Source address and bank */
+        bus_write8(0x00, 0x4302, src_lo);
+        bus_write8(0x00, 0x4303, src_hi);
+        bus_write8(0x00, 0x4304, src_bank);
+
+        /* DMA size: byte 5 = low byte, high = 0 (matches original STZ $4306) */
+        bus_write8(0x00, 0x4305, size_lo);
+        bus_write8(0x00, 0x4306, 0x00);
+
+        /* Trigger DMA channel 0 */
+        bus_write8(0x00, 0x420B, 0x01);
+
+        x -= 6;
+    }
+
+    /* Clear buffer index */
+    wram[0x004A] = 0;
+    wram[0x004B] = 0;
+}

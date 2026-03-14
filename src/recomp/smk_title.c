@@ -611,7 +611,6 @@ void smk_858000(void) {
             bus_write8(0x85, 0x2116, vram_lo);
             bus_write8(0x85, 0x2117, vram_hi);
             bus_write8(0x85, 0x420B, 0x01);  /* trigger DMA ch0 */
-
         }
 
         /* REP #$30 */
@@ -1118,25 +1117,227 @@ static void smk_85_8B7A(void) {
 }
 
 /*
- * OAM builder stub
+ * $80:FE07 — Per-slot position update (velocity → position)
  *
- * The real game uses a complex rendering chain:
- *   $81:CB44 (linked list traversal)
- *   → $80:BA28 (indirect call wrapper)
- *   → $80:8EC5 (sprite drawing via $30,x frame data index)
- *   → $80:8F22 (multi-tile OAM builder using ROM tables at $9090, $91FA)
- *
- * The sprite frame data tables encode multi-tile sprite layouts with
- * per-frame positions, tiles, and attributes. Movement is driven by
- * the frame data index ($30,x) advancing through the tables.
- *
- * TODO: Implement $81:CB44 and the full drawing chain, or extract
- * sprite frame data from ROM tables for direct OAM building.
+ * Positions are 24-bit: $19:$18:$17 (X), $1D:$1C:$1B (Y)
+ * Velocities are 16-bit signed: $22,x (X), $24,x (Y)
+ * Each frame: [$17:$18] += $22,x with carry → $19,x (X axis)
+ *             [$1B:$1C] += $24,x with carry → $1D,x (Y axis)
  */
+static void smk_update_slot_positions(void) {
+    static const uint16_t slots[8] = {
+        0x1000, 0x1100, 0x1200, 0x1300,
+        0x1400, 0x1500, 0x1600, 0x1700
+    };
+
+    for (int i = 0; i < 8; i++) {
+        uint16_t s = slots[i];
+        uint16_t phase = slot_read(s, 0x42);
+        if (phase == 0) continue;  /* inactive slot */
+
+        /* X axis: [$17:$18] += $22,x, carry → $19,x */
+        int16_t vx = (int16_t)slot_read(s, 0x22);
+        if (vx != 0) {
+            uint16_t pos_lo = slot_read(s, 0x17);  /* [$17:$18] as 16-bit */
+            uint32_t sum = (uint32_t)pos_lo + (uint16_t)vx;
+            bus_wram_write16(s + 0x17, (uint16_t)(sum & 0xFFFF));
+            /* Carry propagation to $19,x (8-bit) */
+            int carry = (sum >> 16) & 1;
+            if (vx < 0) carry -= 1;  /* sign extension: subtract 1 for negative velocity */
+            uint8_t hi = bus_wram_read8(s + 0x19);
+            hi = (uint8_t)(hi + carry);
+            bus_wram_write8(s + 0x19, hi);
+        }
+
+        /* Y axis: [$1B:$1C] += $24,x, carry → $1D,x */
+        int16_t vy = (int16_t)slot_read(s, 0x24);
+        if (vy != 0) {
+            uint16_t pos_lo = slot_read(s, 0x1B);
+            uint32_t sum = (uint32_t)pos_lo + (uint16_t)vy;
+            bus_wram_write16(s + 0x1B, (uint16_t)(sum & 0xFFFF));
+            int carry = (sum >> 16) & 1;
+            if (vy < 0) carry -= 1;
+            uint8_t hi = bus_wram_read8(s + 0x1D);
+            hi = (uint8_t)(hi + carry);
+            bus_wram_write8(s + 0x1D, hi);
+        }
+    }
+}
+
+/*
+ * OAM builder + tile DMA staging buffer ($0EA0)
+ *
+ * Implements the $80:8EC5 → $80:8F22 pipeline:
+ * 1. For each active slot, checks if frame data ($30,x) changed from
+ *    cached value ($BA,x). If so, builds DMA staging entries at $0EA0
+ *    to load tile graphics from ROM to VRAM.
+ * 2. Builds OAM entries using the slot's VRAM tile destination to compute
+ *    the correct OAM tile index (nt=1 + offset from $5000).
+ *
+ * Key ROM tables (bank $80):
+ *   $846E[y] — VRAM word destination per slot
+ *   $9080[y] — DMA config (lo=bank, hi=size_lo)
+ *   $9090[frame_ptr] — frame data (lo=$91FA idx, hi has cnt + flags)
+ *   $91FA[idx] — tile source address within bank
+ *
+ * Screen coords (from $80:CF0E):
+ *   screen_x = [$18,x | ($19,x << 8)] + $FF00
+ *   screen_y = [$1C,x | ($1D,x << 8)] + $FF00
+ */
+
+/* VRAM destination per slot (from $80:846E) */
+static const uint16_t vram_dest_table[8] = {
+    0x5800, 0x5840, 0x5880, 0x58C0,
+    0x5C00, 0x5C40, 0x5C80, 0x5CC0
+};
+/* DMA config per slot: lo=ROM bank (from $80:9080), hi=DMA size_lo.
+ * The ROM table has size_lo=$00 which means 64K on SNES — way too much.
+ * Each staging entry transfers one tile row: 16 tiles × 32 bytes = $0200.
+ * We encode this as bank in low byte, $02 size_lo in high byte → size $0200. */
+/* DMA config per slot from $80:9080: lo=ROM bank, hi=$00 (overwritten by frame flags) */
+static const uint16_t dma_config_table[8] = {
+    0x00C0, 0x0084, 0x00C1, 0x00C2,
+    0x00C3, 0x00C5, 0x00C6, 0x00C4
+};
+
+/*
+ * Build DMA staging buffer entries for a slot.
+ * Mirrors $80:8EC5 → $80:8F22 logic.
+ */
+static void smk_build_dma_staging(int slot_idx) {
+    uint16_t s = 0x1000 + slot_idx * 0x100;
+
+    /* Check if frame data changed: LDA $30,x / CMP $BA,x / BEQ skip */
+    uint16_t frame_ptr = slot_read(s, 0x30);
+    uint16_t cached = slot_read(s, 0xBA);
+    if (frame_ptr == cached) return;  /* no change */
+
+    /* Cache the new value: STA $BA,x */
+    slot_write(s, 0xBA, frame_ptr);
+
+    /* Read frame data from ROM: $9090[frame_ptr] */
+    uint16_t frame_data = bus_read16(0x80, 0x9090 + (frame_ptr & 0x7FFF));
+
+    uint8_t tile_idx = (uint8_t)(frame_data & 0xFF);
+    uint8_t hi_byte = (uint8_t)(frame_data >> 8);
+    int cnt = hi_byte & 0x0F;  /* loop count */
+
+    if (cnt == 0) return;  /* no DMA needed */
+
+    /* Look up tile source address from $91FA */
+    uint16_t src_addr = bus_read16(0x80, 0x91FA + tile_idx);
+
+    /* VRAM dest and DMA config for this slot */
+    uint16_t vram_base = vram_dest_table[slot_idx];
+    uint16_t config = dma_config_table[slot_idx];
+
+    /* Original $8F48: STA $17 overwrites config high byte with (hi_byte & $F0).
+     * This becomes the DMA size low byte: e.g. $21→$20 = 32 bytes = 1 tile. */
+    uint8_t dma_size = hi_byte & 0xF0;
+
+    /* Get current buffer write index */
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+    int buf_pos = wram[0x004A];
+
+    /* Build DMA entries (one per "row", cnt iterations) */
+    uint16_t vram_cur = vram_base;
+    uint16_t src_cur = src_addr;
+    for (int j = 0; j < cnt; j++) {
+        /* Entry: 3 words (6 bytes) at $0EA0 + buf_pos */
+        int base = 0x0EA0 + buf_pos;
+        wram[base + 0] = (uint8_t)(vram_cur & 0xFF);
+        wram[base + 1] = (uint8_t)(vram_cur >> 8);
+        wram[base + 2] = (uint8_t)(src_cur & 0xFF);
+        wram[base + 3] = (uint8_t)(src_cur >> 8);
+        wram[base + 4] = (uint8_t)(config & 0xFF);  /* bank */
+        wram[base + 5] = dma_size;                   /* DMA size low byte */
+        buf_pos += 6;
+
+        vram_cur += 0x0100;  /* next VRAM row */
+        src_cur += 0x0200;   /* next source row */
+    }
+
+    /* Update buffer index */
+    wram[0x004A] = (uint8_t)buf_pos;
+}
+
 static void smk_build_oam_from_slots(void) {
-    /* Not yet implemented — OAM stays as initialized by $84:F38C
-     * (all sprites offscreen at $E0F8). The animation state machine
-     * above correctly tracks phase transitions and slot data. */
+    static const uint16_t slots[8] = {
+        0x1000, 0x1100, 0x1200, 0x1300,
+        0x1400, 0x1500, 0x1600, 0x1700
+    };
+
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+
+    /* Build DMA staging entries for any slots with changed frame data */
+    for (int i = 0; i < 8; i++) {
+        uint16_t phase = slot_read(slots[i], 0x42);
+        if (phase == 0) continue;
+        smk_build_dma_staging(i);
+    }
+
+    /* Clear OAM before building — set all 128 sprites offscreen */
+    for (int j = 0; j < 0x200; j += 4) {
+        wram[0x0200 + j + 0] = 0xF8;  /* X = 248 */
+        wram[0x0200 + j + 1] = 0xE0;  /* Y = 224 (offscreen) */
+        wram[0x0200 + j + 2] = 0x00;  /* tile = 0 */
+        wram[0x0200 + j + 3] = 0x00;  /* attr = 0 */
+    }
+    memset(wram + 0x0400, 0, 0x20);  /* clear high table */
+
+    int oam_idx = 0;
+
+    for (int i = 0; i < 8; i++) {
+        uint16_t s = slots[i];
+        uint16_t phase = slot_read(s, 0x42);
+        if (phase == 0) continue;  /* inactive */
+
+        /* Screen coord = [$18:$19] + $FF00 (from $80:CF0E) */
+        uint16_t pos_x = bus_wram_read8(s + 0x18) | (bus_wram_read8(s + 0x19) << 8);
+        uint16_t pos_y = bus_wram_read8(s + 0x1C) | (bus_wram_read8(s + 0x1D) << 8);
+        uint16_t sx = pos_x + 0xFF00;
+        uint16_t sy = pos_y + 0xFF00;
+
+        uint8_t sx_hi = (uint8_t)(sx >> 8);
+        if (sx_hi != 0x00 && sx_hi != 0xFF) continue;  /* offscreen */
+
+        /* Compute OAM tile from VRAM dest for this slot.
+         * VRAM dest is in the second sprite page (objTileAdr2=$5000).
+         * Tile index in nt=1 space = (vram_dest - $5000) / 16.
+         * OAM name table bit = 1.
+         */
+        uint16_t vram_dest = vram_dest_table[i];
+        uint8_t tile = (uint8_t)((vram_dest - 0x5000) / 16);
+
+        /* Build OAM attr: nt=1, pal from $2A high byte bits 1-3,
+         * priority from $2A high byte bits 4-5 */
+        uint16_t tile_attr = slot_read(s, 0x2A);
+        uint8_t orig_attr = (uint8_t)(tile_attr >> 8);
+        /* Keep palette and priority from $2A, set nt=1 */
+        uint8_t attr = (orig_attr & 0xFE) | 0x01;  /* set nt=1 */
+
+        /* $86,x bit 15 = H-flip */
+        uint16_t flags = slot_read(s, 0x86);
+        if (flags & 0x8000) attr ^= 0x40;
+
+        /* Write OAM low table */
+        uint16_t oam_addr = 0x0200 + oam_idx * 4;
+        wram[oam_addr + 0] = (uint8_t)(sx & 0xFF);
+        wram[oam_addr + 1] = (uint8_t)(sy & 0xFF);
+        wram[oam_addr + 2] = tile;
+        wram[oam_addr + 3] = attr;
+
+        /* OAM high table: size=large, X bit 8 */
+        uint16_t hi_addr = 0x0400 + (oam_idx / 4);
+        uint8_t hi_shift = (oam_idx % 4) * 2;
+        uint8_t hi_bits = 0x02;  /* size = large */
+        if (sx_hi == 0xFF) hi_bits |= 0x01;
+        wram[hi_addr] = (wram[hi_addr] & ~(0x03 << hi_shift)) | (hi_bits << hi_shift);
+
+        oam_idx++;
+    }
 }
 
 /*
@@ -1176,6 +1377,9 @@ void smk_858045(void) {
         /* JSR $8B7A — animation state machine */
         smk_85_8B7A();
 
+        /* $80:FE07 — update slot positions (velocity → position) */
+        smk_update_slot_positions();
+
         /* JSL $81CB44 — linked list OAM builder (simplified) */
         smk_build_oam_from_slots();
     }
@@ -1183,7 +1387,50 @@ void smk_858045(void) {
     /* REP #$30 / LDA $80 / BNE skip / JSL $84FD25 */
     op_rep(0x30);
     if (mode == 0) {
-        /* $84FD25 handles "PUSH START" menu logic — skip for now */
+        smk_84FD25();
+    }
+
+    g_cpu.DB = saved_db;
+}
+
+/*
+ * $84:FD25 — Save data erase menu handler
+ *
+ * When $7B == 0: checks if Y+A+L+R buttons are pressed ($0020|$0022 == $40B0).
+ *   If pressed: enters erase mode ($7B=1), copies erase text sprites to $03D0.
+ *   Otherwise: does nothing and returns.
+ * When $7B != 0: handles cursor movement (up/down) and confirm (A/Start).
+ *   $7B=1: cursor on YES, $7B=2: cursor on NO.
+ *   Confirming at $7B=2 erases SRAM $30:6000-$67FF.
+ *
+ * Since we have no joypad input yet, $7B stays 0 and this is effectively a no-op.
+ */
+void smk_84FD25(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x84);
+    op_rep(0x30);
+
+    uint16_t menu_state = bus_wram_read16(g_cpu.DP + 0x7B);
+    if (menu_state != 0) {
+        /* TODO: handle cursor movement and erase confirm when joypad is wired */
+        g_cpu.DB = saved_db;
+        return;
+    }
+
+    /* Check button combo Y+A+L+R ($40B0) to enter erase mode */
+    uint16_t joy1 = bus_wram_read16(0x0020);
+    uint16_t joy2 = bus_wram_read16(0x0022);
+    if ((joy1 | joy2) == 0x40B0) {
+        /* Enter erase mode — copy 12 erase text OAM entries from ROM $84:FDEA */
+        bus_wram_write16(g_cpu.DP + 0x7B, 1);
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            for (int i = 0; i < 48; i += 2) {
+                uint16_t w = bus_read16(0x84, 0xFDEA + i);
+                wram[0x03D0 + i] = (uint8_t)(w & 0xFF);
+                wram[0x03D0 + i + 1] = (uint8_t)(w >> 8);
+            }
+        }
     }
 
     g_cpu.DB = saved_db;
