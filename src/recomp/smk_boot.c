@@ -199,10 +199,6 @@ void smk_808067(void) {
  * For now, implements the frame counter increment and basic flow.
  */
 void smk_8080BA(void) {
-    /* LDA $0162 / BMI -> skip if negative */
-    op_lda_abs16(0x0162);
-    if (g_cpu.flag_N) return;
-
     /* INC $38 — game frame counter */
     op_inc_dp16(0x38);
 
@@ -213,8 +209,133 @@ void smk_8080BA(void) {
     /* JSL $858045 — per-frame sprite update */
     smk_858045();
 
-    /* JSR $853D — additional title screen logic */
-    /* Skip for now */
+    /* JSR $853D — title screen input handler */
+    smk_80853D();
+}
+
+/*
+ * $80:80CA — State handler for state $06 (mode select main loop)
+ *
+ * Original:
+ *   INC $38
+ *   LDA #$0060 / STA $015E
+ *   JSL $8590B1
+ *   RTS
+ */
+void smk_8080CA(void) {
+    op_inc_dp16(0x38);
+
+    op_lda_imm16(0x0060);
+    op_sta_abs16(0x015E);
+
+    /* JSL $8590B1 — mode select per-frame logic */
+    func_table_call(0x8590B1);
+}
+
+/*
+ * $80:824D — NMI state handler for state $06 (mode select NMI)
+ *
+ * Original:
+ *   LDA $000044 / BNE → RTS
+ *   DEC A / STA $000044
+ *   JSR $946E        ; OAM DMA
+ *   JSL $8590D7      ; mode select rendering
+ *   JSR $81B5        ; audio/input cleanup
+ *   RTS
+ */
+void smk_80824D(void) {
+    op_rep(0x30);
+
+    op_lda_long16(0x00, 0x0044);
+    if (!g_cpu.flag_Z) return;
+
+    op_dec_a16();
+    op_sta_long16(0x00, 0x0044);
+
+    smk_80946E();
+
+    /* JSL $8590D7 — mode select NMI rendering */
+    func_table_call(0x8590D7);
+
+    /* JSR $81B5 — audio/input/misc cleanup */
+    smk_8081B5();
+}
+
+/*
+ * $80:8174 — State handler for state $14 (mode select main loop)
+ *
+ * Original calls JSL $088C1A which has complex PPU/DMA/OAM operations.
+ * Simplified here to avoid stack issues from shared entry points.
+ */
+void smk_808174(void) {
+    op_rep(0x30);
+    op_inc_dp16(0x38);
+
+    /* DMA font tiles from $84:C500 to VRAM $4000 (1KB) */
+    bus_write16(0x80, 0x2115, 0x0080);  /* VMAIN=$80 */
+    bus_write16(0x80, 0x2116, 0x4000);  /* VMADD=$4000 */
+    bus_write16(0x80, 0x4300, 0x1801);  /* DMA ctrl=$01 (word), dest=$18 */
+    bus_write16(0x80, 0x4302, 0xC500);  /* src addr=$C500 */
+    bus_write16(0x80, 0x4304, 0x0084);  /* src bank=$84 */
+    bus_write16(0x80, 0x4305, 0x0400);  /* size=$0400 */
+    bus_write16(0x80, 0x420B, 0x0001);  /* trigger DMA ch0 */
+
+    /* OAM DMA */
+    smk_80946E();
+
+    /* Set full brightness */
+    op_sep(0x20);
+    bus_write8(0x80, 0x2100, 0x0F);
+    op_rep(0x20);
+
+    /* Simple mode select input handling:
+     * D-pad up/down to change mode ($2C), B/Start to confirm */
+    uint16_t fade = bus_wram_read16(g_cpu.DP + 0x48);
+    if (fade == 0) {
+        uint16_t edge = bus_wram_read16(g_cpu.DP + 0x28);
+        uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2C);
+
+        if (edge & 0x0800) {  /* Up */
+            if (mode >= 2) mode -= 2;
+        }
+        if (edge & 0x0400) {  /* Down */
+            if (mode <= 2) mode += 2;
+        }
+        bus_wram_write16(g_cpu.DP + 0x2C, mode);
+
+        if (edge & 0x9000) {  /* B or START — confirm */
+            /* Set game mode: $2C=0→1P GP, $2C=2→Match Race, $2C=4→Battle */
+            /* Set player mode: $2E=0 for 1P */
+            bus_wram_write16(g_cpu.DP + 0x2E, 0);
+
+            /* Transition to state $06 (character select) */
+            bus_wram_write16(g_cpu.DP + 0x32, 0x0006);
+            bus_wram_write16(0x015E, 0x0060);
+            bus_wram_write16(g_cpu.DP + 0x48, 0x8F00);
+            printf("smk: mode %d selected — transitioning to character select\n", mode / 2);
+        }
+    }
+}
+
+/*
+ * $80:8369 — NMI state handler for state $14 (mode select NMI)
+ *
+ * Original: check $44, set $44, OAM DMA, JSL $088C54, JSR $81B8
+ */
+void smk_808369(void) {
+    op_rep(0x30);
+
+    op_lda_long16(0x00, 0x0044);
+    if (!g_cpu.flag_Z) return;
+
+    op_dec_a16();
+    op_sta_long16(0x00, 0x0044);
+
+    /* JSR $946E — OAM DMA */
+    smk_80946E();
+
+    /* JSR $81B8 = JSR $843C (joypad) + JSR $9EB2 (misc, stub) */
+    smk_80843C();
 }
 
 /*
@@ -441,7 +562,9 @@ void smk_8081B5(void) {
         g_cpu.DB = saved_db;
     }
 
-    /* JSR $843C — controller/input (handled by snesrecomp input layer) */
+    /* JSR $843C — controller/input processing */
+    smk_80843C();
+
     /* JSR $9EB2 — misc processing (stub) */
 }
 
@@ -512,4 +635,99 @@ void smk_81CB35(void) {
     /* Clear buffer index */
     wram[0x004A] = 0;
     wram[0x004B] = 0;
+}
+
+/*
+ * $80:843C — Joypad reading routine
+ *
+ * Reads auto-joypad registers $4218/$421A, stores current button state
+ * to DP $20/$22, computes newly-pressed (edge-detected) to DP $28/$2A,
+ * and saves previous state to DP $24/$26.
+ *
+ * Memory layout (with DP=0):
+ *   $0020/$0022 = current buttons (joy1/joy2)
+ *   $0024/$0026 = previous frame's buttons
+ *   $0028/$002A = newly pressed (rising edge)
+ *
+ * Original:
+ *   LDX #$0000 / JSR $8445 / LDX #$0002
+ *   $8445: LDA $4218,x / STA $20,x / PHA
+ *          EOR $24,x / AND $20,x / STA $28,x
+ *          ... (demo mode check, skipped if $0E32=0) ...
+ *          PLA / STA $24,x / RTS
+ */
+void smk_80843C(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x80);
+    op_rep(0x30);
+
+    /* Process joy1 (X=0) and joy2 (X=2) */
+    for (uint16_t x = 0; x <= 2; x += 2) {
+        /* LDA $4218,x — read auto-joypad register */
+        uint16_t current = bus_read16(0x80, 0x4218 + x);
+
+        /* STA $20,x — store current button state */
+        bus_wram_write16(g_cpu.DP + 0x20 + x, current);
+
+        /* EOR $24,x — XOR with previous frame */
+        uint16_t prev = bus_wram_read16(g_cpu.DP + 0x24 + x);
+        uint16_t changed = current ^ prev;
+
+        /* AND $20,x — keep only bits that are pressed NOW (rising edge) */
+        uint16_t newly_pressed = changed & current;
+
+        /* STA $28,x — store edge-detected buttons */
+        bus_wram_write16(g_cpu.DP + 0x28 + x, newly_pressed);
+
+        /* STA $24,x — save current as previous for next frame */
+        bus_wram_write16(g_cpu.DP + 0x24 + x, current);
+    }
+
+    g_cpu.DB = saved_db;
+}
+
+/*
+ * $80:853D — Title screen input handler
+ *
+ * Called each frame during state $04.
+ * Checks for button presses to advance past the title screen.
+ *
+ * Original checks $0E68 (SRAM validation flag) before processing
+ * Select+button combos. For the recomp, we check START directly.
+ *
+ * START → transition $14 (player/cup select)
+ * Timer $1040 >= $0642 → attract/demo mode (not yet implemented)
+ */
+void smk_80853D(void) {
+    op_rep(0x30);
+
+    /* LDA #$0060 / STA $015E — fade step */
+    bus_wram_write16(0x015E, 0x0060);
+
+    /* LDA $32 / BNE → RTS (transition already pending) */
+    if (bus_wram_read16(g_cpu.DP + 0x32) != 0) return;
+
+    /* LDA $1040 / CMP #$0642 / BCS → attract mode
+     * $1040 is sprite slot 0's frame counter, used as title screen timer. */
+    uint16_t timer = bus_wram_read16(0x1040);
+    if (timer >= 0x0642) {
+        /* Attract/demo mode timeout — skip for now */
+        return;
+    }
+
+    /* Check for START button on either controller.
+     * Original gates on $0E68 (SRAM signature) then checks Select+button.
+     * We simplify to just START for the recomp. */
+    for (int x = 2; x >= 0; x -= 2) {
+        uint16_t buttons = bus_wram_read16(g_cpu.DP + 0x20 + x);
+
+        if (buttons & 0x1000) {  /* START (bit 12) */
+            /* Transition to state $14 — mode select (GP/Match/Battle) */
+            bus_wram_write16(g_cpu.DP + 0x32, 0x0014);
+            bus_wram_write16(0x015E, 0x0060);
+            bus_wram_write16(g_cpu.DP + 0x48, 0x8F00);  /* fade out */
+            printf("smk: START pressed — transitioning to state $14\n");
+            return;
+        }
+    }
 }

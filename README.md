@@ -6,14 +6,14 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 ## Status
 
-**30 recompiled functions** — game boots, runs the full initialization chain, transitions to the title screen, and renders BG layers, sprites, and palettes with real SNES hardware via LakeSnes.
+**46 recompiled functions** — game boots through the title screen with full rendering, accepts joypad input, and transitions through the mode select and character select screens.
 
 ![Title Screen](titlescreen.gif)
 
 ### What works
 - Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup
 - NMI handler with state dispatch, brightness fading, OAM DMA
-- Main loop with state machine (idle → init → title screen)
+- Main loop with state machine (idle → init → title → mode select → character select)
 - Custom tile/tilemap decompressor ($84:E09E) — all 7 compression modes + E0+ extended counts
 - Title screen transition: PPU register setup, VRAM tile/tilemap loading, palette decompression
 - Real palette data loaded from ROM → CGRAM (256 colors)
@@ -21,14 +21,17 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 - Sprite tile DMA pipeline: per-frame staging buffer → NMI DMA consumer → VRAM
 - 8-slot sprite animation state machine with Y interpolation and phase milestones
 - OAM builder: sprite slots → screen coords → OAM entries with proper tile/attr/priority
-- Per-frame sprite tile DMA from ROM (frame data → staging buffer → NMI transfer)
+- Joypad input: SDL keyboard → SNES auto-joypad → WRAM with edge detection
+- HDMA channel 1: indirect mode window masking ($2126/$2127)
+- Mode select screen (state $14): graphics decompression, PPU init, simple menu input
+- Character select screen (state $06): PPU Mode 0, tile DMA, palette loading, 8-character grid navigation with D-pad, confirm/cancel, transition trigger
 - SRAM checksum validation and save data erase menu (button-gated, matching original logic)
 - LakeSnes PPU renders all 224 scanlines per frame
 - SDL2 window at 768×672 (3× scale), 60fps vsync, keyboard input
 
 ### What's next
-- HDMA scroll effects (animated stripe background)
-- Joypad input wiring (menu selection, mode transitions)
+- Mode select screen graphics (text overlays for GP/Match Race/Battle Mode)
+- Character portraits on the character select grid
 - Race screen (Mode 7, DSP-1 math, full gameplay)
 
 ## Architecture
@@ -37,10 +40,10 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 ┌─────────────────────────────────────────────────┐
 │                 smk_launcher                      │
 │  ┌──────────────────────────────────────────┐    │
-│  │  src/recomp/ — 30 Recompiled functions   │    │
-│  │  smk_boot.c  — NMI, state machine, fade  │    │
+│  │  src/recomp/ — 46 Recompiled functions   │    │
+│  │  smk_boot.c  — NMI, state machine, input │    │
 │  │  smk_init.c  — Init, transition dispatch │    │
-│  │  smk_title.c — Decompressor, PPU setup   │    │
+│  │  smk_title.c — Decompressor, PPU, menus  │    │
 │  └──────────────────────────────────────────┘    │
 │                       │                           │
 │              bus_read8 / bus_write8               │
@@ -61,40 +64,20 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus_write8(bank, addr, val)` which route through LakeSnes's real memory bus to the actual PPU, APU, DMA, and cartridge hardware. The PPU renders scanlines, the APU processes audio, and DMA transfers happen exactly as on real hardware.
 
-## Recompiled Functions (30)
+## Controls
 
-| Address | Function | Description |
-|---------|----------|-------------|
-| `$80:FF70` | `smk_80FF70` | Reset vector — boot entry point |
-| `$80:803A` | `smk_80803A` | Hardware init (PPU, APU, WRAM, DMA) |
-| `$80:8056` | `smk_808056` | Main loop (state dispatch) |
-| `$80:8000` | `smk_808000` | NMI handler (OAM DMA, scroll, brightness) |
-| `$80:B181` | `smk_80B181` | Brightness fade in/out |
-| `$80:946E` | `smk_80946E` | OAM DMA transfer (WRAM → PPU) |
-| `$80:81B5` | `smk_8081B5` | NMI cleanup (audio, input) |
-| `$80:8067` | `smk_808067` | State $02 handler (init trigger) |
-| `$80:80BA` | `smk_8080BA` | State $04 handler (title screen loop) |
-| `$80:8096` | `smk_808096` | Null state handler (states $00/$1A) |
-| `$80:81DD` | `smk_8081DD` | NMI state $00/$1A (wake main loop) |
-| `$80:8237` | `smk_808237` | NMI state $04 (title screen NMI) |
-| `$80:8BEA` | `smk_808BEA` | PPU register init + font tile DMA |
-| `$81:CB35` | `smk_81CB35` | NMI sprite tile DMA consumer |
-| `$81:E000` | `smk_81E000` | Full init (WRAM clear, PPU, DSP-1, state vars) |
-| `$81:E067` | `smk_81E067` | Transition dispatch (indexed by DP $32) |
-| `$81:E0AD` | `smk_81E0AD` | Title screen transition |
-| `$81:E50D` | `smk_81E50D` | Title PPU register setup |
-| `$81:E10A` | `smk_81E10A` | Tile data decompression |
-| `$81:E118` | `smk_81E118` | Tilemap decompression |
-| `$81:E584` | `smk_81E584` | Additional data decompression |
-| `$81:E576` | `smk_81E576` | Sprite tile decompression + 2bpp→4bpp interleave |
-| `$81:E933` | `smk_81E933` | VRAM DMA transfers |
-| `$84:E09E` | `smk_84E09E` | Custom decompressor (7 modes + E0+ extended) |
-| `$84:F38C` | `smk_84F38C` | PPU/display reset |
-| `$84:FCF1` | `smk_84FCF1` | SRAM checksum validation |
-| `$84:FD25` | `smk_84FD25` | Save data erase menu handler |
-| `$85:8000` | `smk_858000` | Sprite/palette/OAM setup + slot init |
-| `$85:8045` | `smk_858045` | Per-frame sprite update (animation + OAM) |
-| `$85:809B` | `smk_85809B` | BG scroll + HDMA trigger |
+| Key | SNES Button |
+|-----|-------------|
+| Arrow keys | D-pad |
+| Z | B |
+| X | Y |
+| A | A |
+| S | X |
+| Q | L |
+| W | R |
+| Enter | Start |
+| Right Shift | Select |
+| Escape | Quit |
 
 ## Building
 
@@ -116,7 +99,7 @@ cmake --build build --config Debug
 ### Run
 
 ```bash
-build/Debug/smk_launcher.exe "Super Mario Kart (USA).sfc"
+build/Debug/smk_launcher.exe
 ```
 
 The ROM file is not included — supply your own US v1.0 copy (MD5: `7f25ce5a283d902694c52fb1152fa61a`).

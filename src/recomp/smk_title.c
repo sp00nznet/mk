@@ -474,6 +474,57 @@ void smk_84F38C(void) {
 }
 
 /*
+ * $84:F421 — Viewport and HDMA parameter setup
+ *
+ * Sets display configuration variables and HDMA window parameters.
+ * Called during mode select/race screen transitions.
+ */
+void smk_84F421(void) {
+    op_rep(0x30);
+
+    /* Display/window config in DP */
+    bus_wram_write16(g_cpu.DP + 0x84, 0x0802);
+    bus_wram_write16(g_cpu.DP + 0x86, 0x2713);
+    bus_wram_write16(g_cpu.DP + 0x88, 0x2718);
+
+    /* HDMA-related window sizes */
+    bus_wram_write16(0x0180, 0x0008);
+    bus_wram_write16(0x0182, 0x0008);
+    bus_wram_write16(0x0184, 0x0002);
+    bus_wram_write16(0x0186, 0x0002);
+
+    /* Clear flags */
+    bus_wram_write16(0x0E66, 0);
+
+    /* Clear bit 14 of player config words */
+    uint16_t v1 = bus_wram_read16(0x10E2);
+    bus_wram_write16(0x10E2, v1 & 0xBFFF);
+    uint16_t v2 = bus_wram_read16(0x11E2);
+    bus_wram_write16(0x11E2, v2 & 0xBFFF);
+}
+
+/*
+ * $84:F45A — PPU register setup for Mode 0 screens
+ *
+ * Configures PPU for the mode select / race setup screens.
+ * Mode 0, all layers enabled, BG tilemap addresses for 4 layers.
+ */
+void smk_84F45A(void) {
+    op_sep(0x30);
+
+    bus_write8(0x84, 0x2105, 0x00);  /* BGMODE: Mode 0 */
+    bus_write8(0x84, 0x212C, 0x1F);  /* TM: BG1+BG2+BG3+BG4+OBJ */
+    bus_write8(0x84, 0x2107, 0x24);  /* BG1SC: tilemap at VRAM $2400, 32x32 */
+    bus_write8(0x84, 0x2108, 0x28);  /* BG2SC: tilemap at VRAM $2800, 32x32 */
+    bus_write8(0x84, 0x2109, 0x2C);  /* BG3SC: tilemap at VRAM $2C00, 32x32 */
+    bus_write8(0x84, 0x210A, 0x38);  /* BG4SC: tilemap at VRAM $3800, 32x32 */
+    bus_write8(0x84, 0x210B, 0x33);  /* BG12NBA: BG1 tiles $3000, BG2 tiles $3000 */
+    bus_write8(0x84, 0x210C, 0x33);  /* BG34NBA: BG3 tiles $3000, BG4 tiles $3000 */
+    bus_write8(0x84, 0x2101, 0x02);  /* OBSEL: 8x8/16x16 sprites */
+    bus_write8(0x84, 0x2115, 0x80);  /* VMAIN: word access, inc on high */
+}
+
+/*
  * $84:FCF1 — SRAM checksum validation
  *
  * Sums words at $30:67F2-$30:67F5, compares with checksum at $30:67F0.
@@ -768,6 +819,36 @@ void smk_81E0AD(void) {
     bus_write8(0x81, 0x210B, 0x00);  /* BG12NBA: BG1+BG2 tiles at $0000 */
     bus_write8(0x81, 0x210C, 0x22);  /* BG34NBA: BG3+BG4 tiles at $2000 */
     bus_write8(0x81, 0x2101, 0x02);  /* OBSEL: 8x8/16x16 sprites */
+
+    /* VMAIN = $80 (word access, increment on high byte write) */
+    bus_write8(0x81, 0x2115, 0x80);
+
+    /* $85:82AE — HDMA channel 1 configuration
+     * Indirect mode, 2-register write to $2126/$2127 (window 1 left/right).
+     * Table at WRAM $0180, indirect data bank = $85. */
+    bus_write8(0x81, 0x4310, 0x41);  /* $4310 = $41: indirect HDMA, 2-reg write */
+    bus_write8(0x81, 0x4311, 0x26);  /* $4311 = $26: B-bus target $2126/$2127 */
+    bus_write8(0x81, 0x4312, 0x80);  /* $4312 = $80: table addr low ($0180) */
+    bus_write8(0x81, 0x4313, 0x01);  /* $4313 = $01: table addr high */
+    bus_write8(0x81, 0x4314, 0x00);  /* $4314 = $00: table bank ($00 = WRAM) */
+    bus_write8(0x81, 0x4315, 0x00);  /* $4315 = $00 */
+    bus_write8(0x81, 0x4316, 0x00);  /* $4316 = $00 */
+    bus_write8(0x81, 0x4317, 0x85);  /* $4317 = $85: indirect data bank */
+
+    /* Copy 13-byte HDMA table from ROM $85:82E2 to WRAM $0180 */
+    {
+        static const uint8_t hdma_table[13] = {
+            0x2C, 0x09, 0x83, 0x60, 0x09, 0x83,
+            0x28, 0x09, 0x83, 0x70, 0x09, 0x83,
+            0x00
+        };
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            for (int i = 0; i < 13; i++) {
+                wram[0x0180 + i] = hdma_table[i];
+            }
+        }
+    }
 
     /* Clear state vars */
     bus_wram_write16(0x0158, 0);
@@ -1432,6 +1513,836 @@ void smk_84FD25(void) {
             }
         }
     }
+
+    g_cpu.DB = saved_db;
+}
+
+/* ===================================================================
+ * Mode select screen (state $06) — bank $85
+ * =================================================================== */
+
+/*
+ * $85:91DE — Mode select display setup
+ *
+ * Calls $84:F421 (viewport params), reads character selection tables,
+ * sets up viewport split positions, calls $84:F45A (PPU Mode 0 setup).
+ *
+ * Original: JSL $84F421, table lookups based on $2E/$1012/$1112,
+ *           sets DP $66/$68 viewport positions, JSL $84F45A
+ */
+void smk_8591DE(void) {
+    /* JSL $84F421 — viewport/HDMA setup */
+    smk_84F421();
+
+    op_rep(0x30);
+
+    uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2E);
+
+    if (mode == 0) {
+        /* 1P mode: check if P1 and P2 characters are the same */
+        uint16_t p1_char = bus_wram_read16(0x1012);
+        uint16_t p2_char = bus_wram_read16(0x1112);
+
+        if (p1_char != p2_char) {
+            /* Different characters — look up viewport positions from table */
+            uint16_t pos1 = bus_read16(0x85, 0x9283 + p1_char);
+            bus_wram_write16(g_cpu.DP + 0x66, pos1);
+            uint16_t pos2 = bus_read16(0x85, 0x9283 + p2_char);
+            bus_wram_write16(g_cpu.DP + 0x68, pos2);
+        } else {
+            /* Same character */
+            bus_wram_write16(g_cpu.DP + 0x66, 0);
+            bus_wram_write16(g_cpu.DP + 0x68, 0x0008);
+        }
+    } else {
+        /* 2P/Battle mode */
+        if (mode == 4) {
+            uint16_t p2_char = bus_wram_read16(0x1112);
+            uint16_t pos = bus_read16(0x85, 0x9283 + p2_char);
+            bus_wram_write16(g_cpu.DP + 0x66, pos);
+        } else {
+            uint16_t p1_char = bus_wram_read16(0x1012);
+            uint16_t pos = bus_read16(0x85, 0x9283 + p1_char);
+            bus_wram_write16(g_cpu.DP + 0x66, pos);
+        }
+        /* Set second viewport for split screen */
+        bus_wram_write16(g_cpu.DP + 0x68, 0x00F0);
+        bus_wram_write16(g_cpu.DP + 0x70 + 2, 0x0002);
+    }
+
+    /* JSL $84F45A — PPU Mode 0 register setup */
+    smk_84F45A();
+}
+
+/*
+ * $85:915F — Tile DMA + palette loading
+ *
+ * DMAs 4 tile blocks from WRAM $7F to VRAM (same tables as title screen),
+ * fills VRAM $3800 with background pattern, loads palette from $7F:E800.
+ *
+ * Original:
+ *   LDX #$08/$0A/$0C/$0E, JSR $8171 (×4) — DMA tile blocks
+ *   Fill VRAM $3800 with $3014 (1024 words)
+ *   Load 256 CGRAM colors from $7F:E800
+ *   If $2E != 0, JSR $91B4 + $91BB
+ */
+void smk_85915F(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x85);
+    op_sep(0x30);
+
+    /* DMA 4 tile blocks: X = $08, $0A, $0C, $0E
+     * Tables at $85:81AA (src), $85:81D0 (size), $85:81F6 (vram dest) */
+    for (int blk = 0; blk < 4; blk++) {
+        int x = 0x08 + blk * 2;
+
+        bus_write8(0x85, 0x4300, 0x01);  /* DMA ctrl: 2-reg word write */
+        bus_write8(0x85, 0x4301, 0x18);  /* B-bus: $2118 (VMDATAL) */
+
+        uint8_t src_lo = bus_read8(0x85, 0x81AA + x);
+        uint8_t src_hi = bus_read8(0x85, 0x81AB + x);
+        bus_write8(0x85, 0x4302, src_lo);
+        bus_write8(0x85, 0x4303, src_hi);
+        bus_write8(0x85, 0x4304, 0x7F);  /* source bank $7F */
+
+        uint8_t size_lo = bus_read8(0x85, 0x81D0 + x);
+        uint8_t size_hi = bus_read8(0x85, 0x81D1 + x);
+        bus_write8(0x85, 0x4305, size_lo);
+        bus_write8(0x85, 0x4306, size_hi);
+
+        uint8_t vram_lo = bus_read8(0x85, 0x81F6 + x);
+        uint8_t vram_hi = bus_read8(0x85, 0x81F7 + x);
+        bus_write8(0x85, 0x2116, vram_lo);
+        bus_write8(0x85, 0x2117, vram_hi);
+
+        bus_write8(0x85, 0x420B, 0x01);  /* trigger DMA ch0 */
+    }
+
+    op_rep(0x30);
+
+    /* Fill VRAM at $3800 with $3014 pattern (1024 words) */
+    bus_write16(0x85, 0x2116, 0x3800);
+    for (int i = 0; i < 0x400; i++) {
+        bus_write8(0x00, 0x2118, 0x14);
+        bus_write8(0x00, 0x2119, 0x30);
+    }
+
+    /* Load 256 CGRAM colors from $7F:E800 */
+    op_sep(0x20);
+    bus_write8(0x85, 0x2121, 0x00);  /* CGRAM address = 0 */
+
+    uint8_t *wram = bus_get_wram();
+    if (wram) {
+        for (int i = 0; i < 0x200; i++) {
+            bus_write8(0x85, 0x2122, wram[0x10000 + 0xE800 + i]);
+        }
+    }
+
+    op_rep(0x20);
+
+    /* If $2E != 0 (2P mode), additional palette setup */
+    uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2E);
+    if (mode != 0) {
+        /* JSR $91B4 — additional palette loading (stub) */
+        /* JSR $91BB — additional setup (stub) */
+    }
+
+    op_sep(0x20);
+    g_cpu.DB = saved_db;
+}
+
+/*
+ * $85:9239 — HDMA table builder / sprite slot init wrapper
+ *
+ * Loads sprite init table pointer and calls $81:CB98.
+ *
+ * Original:
+ *   LDY #$92A3     ; table at $85:92A3
+ *   JSL $81CB98    ; HDMA/sprite slot builder
+ *   RTS
+ */
+void smk_859239(void) {
+    /* The sprite init table at $85:92A3 defines 8 sprite slots
+     * with X/Y positions and tile attributes.
+     * $81:CB98 reads this table and initializes each slot.
+     * For now, implement basic slot initialization inline. */
+
+    op_rep(0x30);
+
+    /* Initialize basic sprite slot data from table at $85:92A3 */
+    static const struct {
+        uint16_t slot_base;
+        uint16_t x_pos;
+        uint16_t y_pos;
+        uint16_t tile_attr;
+    } slots[8] = {
+        { 0x1000, 0x0038, 0x0070, 0x4000 },
+        { 0x1100, 0x0038, 0x00B1, 0x4000 },
+        { 0x1200, 0x0098, 0x0070, 0x4000 },
+        { 0x1300, 0x0068, 0x0071, 0x4000 },
+        { 0x1400, 0x0098, 0x00B1, 0x4000 },
+        { 0x1500, 0x00C8, 0x0071, 0x4000 },
+        { 0x1600, 0x00C8, 0x00B0, 0x4000 },
+        { 0x1700, 0x0068, 0x00B0, 0x4000 },
+    };
+
+    /* Set common init values (from $81:CB98) */
+    bus_wram_write16(g_cpu.DP + 0xC8, 0x1000);
+    bus_wram_write16(g_cpu.DP + 0x4A, 0);
+    bus_wram_write16(0x1E92, 0);
+    bus_wram_write16(g_cpu.DP + 0xB0, 0x00B0);
+    bus_wram_write16(g_cpu.DP + 0xB2, 0x00B0);
+    bus_wram_write16(0x1EF0, 0);
+
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+
+    for (int i = 0; i < 8; i++) {
+        uint16_t base = slots[i].slot_base;
+
+        /* Clear slot memory (80 words = 160 bytes) at slot+$00 and slot+$A0 */
+        for (int j = 0; j < 0xA0; j += 2) {
+            bus_wram_write16(base + j, 0);
+        }
+
+        /* Set position and attributes */
+        bus_wram_write16(base + 0x18, slots[i].x_pos);
+        bus_wram_write16(base + 0x1C, slots[i].y_pos);
+        bus_wram_write16(base + 0x2A, slots[i].tile_attr);
+        bus_wram_write16(base + 0xBA, 0x0140);
+        bus_wram_write16(base + 0x30, 0x0120);
+    }
+
+    /* Initialize display variables for NMI rendering */
+    uint16_t sel1 = bus_wram_read16(g_cpu.DP + 0x66);
+    uint16_t sel2 = bus_wram_read16(g_cpu.DP + 0x68);
+    uint16_t disp1 = bus_read16(0x85, 0x92E5 + sel1);
+    uint16_t disp2 = bus_read16(0x85, 0x92E5 + sel2);
+
+    bus_wram_write16(g_cpu.DP + 0x74, disp1);  /* P1 old display pos */
+    bus_wram_write16(g_cpu.DP + 0x76, disp2);  /* P2 old display pos */
+    bus_wram_write16(g_cpu.DP + 0x7E, disp1);  /* P1 new display pos */
+    bus_wram_write16(g_cpu.DP + 0x80, disp2);  /* P2 new display pos */
+    bus_wram_write16(g_cpu.DP + 0x70, 0);      /* P1 confirm state */
+    bus_wram_write16(g_cpu.DP + 0x72, 0);      /* P2 confirm state */
+    bus_wram_write16(g_cpu.DP + 0x96, 0);      /* Transition delay counter */
+    bus_wram_write16(g_cpu.DP + 0x98, 0);      /* Animation counter */
+    bus_wram_write16(g_cpu.DP + 0x9A, 0x1815); /* P1 cursor animation */
+    bus_wram_write16(g_cpu.DP + 0x9C, 0x1C17); /* P2 cursor animation */
+
+    /* Character sprite params */
+    uint16_t spr1 = bus_read16(0x85, 0x9273 + sel1);
+    uint16_t spr2 = bus_read16(0x85, 0x9273 + sel2);
+    bus_wram_write16(g_cpu.DP + 0x8C, spr1);
+    bus_wram_write16(g_cpu.DP + 0x8E, spr2);
+
+    printf("smk: sprite slots initialized (8 slots, P1 sel=%d P2 sel=%d)\n",
+           sel1/2, sel2/2);
+}
+
+/*
+ * $85:909B — Mode select transition init
+ *
+ * Called from transition $06 handler ($81:E126).
+ * Resets PPU, sets up display for mode selection screen.
+ *
+ * Original:
+ *   PHB/PHK/PLB (DB=$85)
+ *   SEP #$30
+ *   JSL $84F38C   ; PPU reset
+ *   JSR $91DE     ; mode select display setup
+ *   JSR $915F     ; palette/tile loading
+ *   REP #$30
+ *   JSR $9239     ; OAM/sprite init
+ *   PLB/RTL
+ */
+void smk_85909B(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x85);
+
+    op_sep(0x30);
+
+    /* JSL $84F38C — PPU reset */
+    smk_84F38C();
+
+    /* JSR $91DE — mode select display setup */
+    smk_8591DE();
+
+    /* JSR $915F — tile DMA + palette loading */
+    smk_85915F();
+
+    op_rep(0x30);
+
+    /* JSR $9239 — HDMA/sprite slot init */
+    smk_859239();
+
+    g_cpu.DB = saved_db;
+    printf("smk: mode select init (state $06) complete\n");
+}
+
+/*
+ * $85:93A9 — Determine active player index
+ * Sets DP $82 = 0 (P1) or 2 (P2) based on which controller pressed.
+ */
+static void smk_85_93A9(void) {
+    uint16_t e66 = bus_wram_read16(0x0E66);
+    uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2E);
+
+    if (e66 == 0 && mode != 0) {
+        /* 2P mode, P2's turn */
+        bus_wram_write16(g_cpu.DP + 0x82, 0);
+    } else {
+        uint16_t joy1 = bus_wram_read16(g_cpu.DP + 0x6A);
+        if (joy1 != 0) {
+            bus_wram_write16(g_cpu.DP + 0x82, 0);
+        } else {
+            bus_wram_write16(g_cpu.DP + 0x82, 2);
+        }
+    }
+}
+
+/*
+ * $85:947D — Validate selection against other player
+ * Swaps X with the other player index and compares.
+ * Returns: sets Z flag if selection matches the other player's.
+ */
+static uint16_t smk_85_947D(uint16_t val, uint16_t x) {
+    uint16_t other_x = x ^ 2;
+    uint16_t other_sel = bus_wram_read16(g_cpu.DP + 0x66 + other_x);
+    return val - other_sel;  /* 0 if match */
+}
+
+/*
+ * $85:92F9 — Input processing
+ * Copies edge-detected buttons to DP $6A/$6C.
+ * For states $04/$06, skips button handler sub-call.
+ */
+static void smk_85_92F9(void) {
+    /* Skip if fading */
+    if (bus_wram_read16(g_cpu.DP + 0x48) != 0) return;
+
+    /* Skip if not full brightness */
+    op_sep(0x20);
+    uint8_t brightness = bus_wram_read8(0x0161);
+    op_rep(0x20);
+    if (brightness != 0x0F) return;
+
+    /* Copy edge-detected buttons to $6A/$6C */
+    uint16_t joy1_edge = bus_wram_read16(g_cpu.DP + 0x28);
+    bus_wram_write16(g_cpu.DP + 0x6A, joy1_edge);
+    uint16_t joy2_edge = bus_wram_read16(g_cpu.DP + 0x2A);
+    bus_wram_write16(g_cpu.DP + 0x6C, joy2_edge);
+
+    /* For state $06, check if we need the button handler */
+    uint16_t state = bus_wram_read16(g_cpu.DP + 0x36);
+    if (state == 0x0004 || state == 0x0006) return;
+
+    /* JSR $9336 — button handler for other states */
+    {
+        uint16_t mode = bus_wram_read16(0x002E);
+        if (mode == 0) return;
+        if (mode == 4) {
+            bus_wram_write16(g_cpu.DP + 0x6A, 0);
+        } else {
+            bus_wram_write16(g_cpu.DP + 0x6C, 0);
+        }
+    }
+}
+
+/*
+ * $85:9348 — Animation counter updates
+ */
+static void smk_85_9348(void) {
+    uint16_t v1 = bus_wram_read16(0x0060);
+    bus_wram_write16(0x0060, v1 + 0x00B0);
+
+    uint16_t v2 = bus_wram_read16(g_cpu.DP + 0x63);
+    bus_wram_write16(g_cpu.DP + 0x63, v2 + 0x0130);
+}
+
+/*
+ * $85:93C4 — D-pad character selection handler
+ * Navigates the 8-character grid (4×2) with D-pad.
+ */
+static void smk_85_93C4(void) {
+    /* Determine active player */
+    smk_85_93A9();
+
+    uint16_t px = bus_wram_read16(g_cpu.DP + 0x82);
+
+    /* Check lock-out */
+    if (bus_wram_read16(0x0196 + px) != 0) return;
+    if (bus_wram_read16(g_cpu.DP + 0x70 + px) != 0) return;
+
+    /* Current selection */
+    uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66 + px);
+
+    /* Save old display value */
+    uint16_t old_disp = bus_read16(0x85, 0x92E5 + sel);
+    bus_wram_write16(g_cpu.DP + 0x74 + px, old_disp);
+
+    /* JSL $84F5F2 — stub (cursor display update) */
+
+    /* Check D-pad direction */
+    uint16_t dpad = (bus_wram_read16(g_cpu.DP + 0x6A) |
+                     bus_wram_read16(g_cpu.DP + 0x6C)) & 0x0F00;
+
+    uint16_t new_sel = sel;
+
+    if (dpad == 0x0100) {
+        /* Right: +2, wrap */
+        new_sel = sel + 2;
+        /* Skip matching other player's selection */
+        while (new_sel < 16 && smk_85_947D(new_sel, px) == 0) {
+            new_sel += 2;
+        }
+        if (new_sel >= 16) {
+            /* Wrap to other row */
+            new_sel = (sel < 8) ? 8 : 0;
+            /* Find first non-matching */
+            for (int tries = 0; tries < 8; tries++) {
+                if (smk_85_947D(new_sel, px) != 0) break;
+                new_sel += 2;
+                if (new_sel >= 16) new_sel = 0;
+            }
+        }
+    } else if (dpad == 0x0200) {
+        /* Left: -2, wrap */
+        new_sel = (sel >= 2) ? sel - 2 : 14;
+        while (new_sel < 16 && smk_85_947D(new_sel, px) == 0) {
+            new_sel = (new_sel >= 2) ? new_sel - 2 : 14;
+        }
+    } else if (dpad == 0x0800) {
+        /* Up: -8 */
+        new_sel = (sel >= 8) ? sel - 8 : sel;
+        if (smk_85_947D(new_sel, px) == 0 || new_sel == sel) {
+            /* Can't move up or blocked */
+            goto done;
+        }
+    } else if (dpad == 0x0400) {
+        /* Down: +8 */
+        new_sel = (sel < 8) ? sel + 8 : sel;
+        if (new_sel >= 16 || smk_85_947D(new_sel, px) == 0) {
+            goto done;
+        }
+    } else {
+        goto done;
+    }
+
+    /* Store new selection */
+    if (new_sel < 16) {
+        bus_wram_write16(g_cpu.DP + 0x66 + px, new_sel);
+
+        /* Update display value */
+        uint16_t new_disp = bus_read16(0x85, 0x92E5 + new_sel);
+        bus_wram_write16(g_cpu.DP + 0x7E + px, new_disp);
+
+        /* JSL $81F5A7 with A=$002C — play cursor move SFX */
+        func_table_call(0x81F5A7);  /* may not be registered, OK */
+    }
+
+done:
+    /* JSL $84F601 — stub (cursor redraw) */
+    return;
+}
+
+/*
+ * $85:939F — D-pad transition check
+ * If D-pad pressed, dispatches to selection handler.
+ */
+static void smk_85_939F(void) {
+    uint16_t buttons = bus_wram_read16(g_cpu.DP + 0x6A) |
+                       bus_wram_read16(g_cpu.DP + 0x6C);
+    if (buttons & 0x0F00) {
+        smk_85_93C4();
+    }
+}
+
+/*
+ * $85:9487 — Confirm (B/Start) and Cancel (X) button handler
+ */
+static void smk_85_9487(void) {
+    uint16_t buttons = bus_wram_read16(g_cpu.DP + 0x6A) |
+                       bus_wram_read16(g_cpu.DP + 0x6C);
+
+    if (buttons & 0x9000) {
+        /* B ($8000) or Start ($1000) pressed — confirm selection */
+        uint16_t mode = bus_wram_read16(0x002E);
+        uint16_t active_x;
+
+        if (mode == 4) {
+            active_x = 0;
+        } else {
+            uint16_t joy1_b = bus_wram_read16(g_cpu.DP + 0x6A) & 0x9000;
+            if (joy1_b) {
+                active_x = 0;
+            } else {
+                active_x = 2;
+            }
+        }
+
+        /* Check lock-out */
+        if (bus_wram_read16(0x0196 + active_x) != 0) return;
+
+        uint16_t confirm_state = bus_wram_read16(g_cpu.DP + 0x70 + active_x);
+        if (confirm_state == 1) {
+            /* Already in confirm animation, advance to fully confirmed */
+            bus_wram_write16(g_cpu.DP + 0x70 + active_x, 2);
+            return;
+        }
+        if (confirm_state == 2) return;  /* Already confirmed */
+
+        /* Set confirm state */
+        bus_wram_write16(0x0180 + active_x, active_x);
+        bus_wram_write16(g_cpu.DP + 0x70 + active_x, 1);
+
+        /* Look up sprite params */
+        uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66 + active_x);
+        uint16_t sprite_val = bus_read16(0x85, 0x9273 + sel);
+        bus_wram_write16(g_cpu.DP + 0x8C + active_x, sprite_val);
+        bus_wram_write16(0x0184 + active_x, 0);
+
+        /* Play confirm SFX — JSL $81F5A7 */
+        func_table_call(0x81F5A7);
+        return;
+    }
+
+    if (buttons & 0x0040) {
+        /* X pressed — cancel selection */
+        uint16_t mode = bus_wram_read16(0x002E);
+        uint16_t active_x;
+
+        if (mode == 4) {
+            active_x = 0;
+        } else {
+            uint16_t joy1_x = bus_wram_read16(g_cpu.DP + 0x6A) & 0x0040;
+            if (joy1_x) {
+                active_x = 0;
+            } else {
+                active_x = 2;
+            }
+        }
+
+        /* Can only cancel if in confirm state 1 */
+        if (bus_wram_read16(g_cpu.DP + 0x70 + active_x) != 1) return;
+
+        /* Cancel */
+        bus_wram_write16(0x0180 + active_x, 8);
+        bus_wram_write16(g_cpu.DP + 0x70 + active_x, 0);
+
+        uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66 + active_x);
+        uint16_t sprite_val = bus_read16(0x85, 0x9273 + sel);
+        bus_wram_write16(g_cpu.DP + 0x8C + active_x, sprite_val);
+        bus_wram_write16(0x0184 + active_x, 2);
+
+        /* Play cancel SFX */
+        func_table_call(0x81F5A7);
+    }
+}
+
+/*
+ * $85:965B — Transition trigger
+ * When both players have confirmed (after 64-frame delay), triggers
+ * transition to the next game state.
+ */
+static void smk_85_965B(void) {
+    /* Check both players confirmed ($70=2, $72=2) */
+    if (bus_wram_read16(g_cpu.DP + 0x70) != 2) return;
+    if (bus_wram_read16(g_cpu.DP + 0x72) != 2) return;
+
+    /* Increment delay counter */
+    uint16_t counter = bus_wram_read16(g_cpu.DP + 0x96);
+    counter++;
+    bus_wram_write16(g_cpu.DP + 0x96, counter);
+    if (counter < 0x40) return;  /* Wait 64 frames */
+
+    /* Store character selections from table $9293 */
+    uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2E);
+    if (mode == 0 || bus_wram_read16(0x0E66) != 0) {
+        uint16_t sel1 = bus_wram_read16(g_cpu.DP + 0x66);
+        uint16_t char1 = bus_read16(0x85, 0x9293 + sel1);
+        bus_wram_write16(0x1012, char1);
+
+        uint16_t sel2 = bus_wram_read16(g_cpu.DP + 0x68);
+        uint16_t char2 = bus_read16(0x85, 0x9293 + sel2);
+        bus_wram_write16(0x1112, char2);
+        bus_wram_write16(0x0E62, char2);
+    } else {
+        if (mode != 4) {
+            uint16_t sel1 = bus_wram_read16(g_cpu.DP + 0x66);
+            uint16_t char1 = bus_read16(0x85, 0x9293 + sel1);
+            bus_wram_write16(0x1012, char1);
+        } else {
+            uint16_t sel1 = bus_wram_read16(g_cpu.DP + 0x66);
+            uint16_t char1 = bus_read16(0x85, 0x9293 + sel1);
+            bus_wram_write16(0x1112, char1);
+        }
+    }
+
+    /* Determine next transition based on game mode ($2C) */
+    uint16_t game_mode = bus_wram_read16(g_cpu.DP + 0x2C);
+    uint16_t next_state;
+    if (game_mode == 0) {
+        next_state = 0x0008;
+    } else {
+        next_state = 0x0016;
+    }
+
+    bus_wram_write16(g_cpu.DP + 0x32, next_state);
+    bus_wram_write16(g_cpu.DP + 0x48, 0x8F00);  /* Fade out */
+
+    printf("smk: characters selected — P1=%04X P2=%04X → transition $%04X\n",
+           bus_wram_read16(0x1012), bus_wram_read16(0x1112), next_state);
+}
+
+/*
+ * $85:9561 — OAM rendering
+ * Sets OAM base pointer and calls sprite builder.
+ */
+static void smk_85_9561(void) {
+    bus_wram_write16(g_cpu.DP + 0x3C, 0x0300);
+    /* JSR $956E — sprite rendering sub (stub) */
+    /* JSL $81CB44 — OAM builder (stub) */
+}
+
+/*
+ * $84:F4E6 — Y button toggle (character lock/unlock)
+ */
+static void smk_84_F4E6(void) {
+    uint16_t game_mode = bus_wram_read16(g_cpu.DP + 0x2C);
+    if (game_mode == 4 || game_mode == 6) return;
+
+    /* Check P1 Y held + A edge */
+    uint16_t p1_held = bus_wram_read16(0x0020);
+    if ((p1_held & 0x4000) == 0x4000) {
+        uint16_t p1_edge = bus_wram_read16(g_cpu.DP + 0x6A);
+        if (p1_edge & 0x0080) {
+            /* Toggle P1 character lock */
+            bus_wram_write16(0x0190, 0);
+            goto do_toggle;
+        }
+    }
+
+    /* Check P2 Y held + A edge */
+    uint16_t p2_held = bus_wram_read16(0x0022);
+    if ((p2_held & 0x4000) != 0x4000) return;
+    uint16_t p2_edge = bus_wram_read16(g_cpu.DP + 0x6C);
+    if (!(p2_edge & 0x0080)) return;
+    bus_wram_write16(0x0190, 2);
+
+do_toggle:
+    {
+        /* Determine which player's slot to toggle */
+        uint16_t px = bus_wram_read16(g_cpu.DP + 0x82);
+        if (bus_wram_read16(g_cpu.DP + 0x70 + px) != 0) return;
+        if (bus_wram_read16(0x0196 + px) != 0) return;
+
+        uint16_t slot_base = (bus_wram_read16(0x0190) == 0) ? 0x1000 : 0x1100;
+        uint16_t flags = bus_wram_read16(slot_base + 0xE2);
+
+        if (flags & 0x4000) {
+            /* Unlock */
+            bus_wram_write16(slot_base + 0xE2, flags & ~0x4000);
+            bus_wram_write16(0x0192 + px, 0);
+            bus_wram_write16(0x0196 + px, 1);
+        } else {
+            /* Lock */
+            bus_wram_write16(slot_base + 0xE2, flags | 0x4000);
+            bus_wram_write16(0x0192 + px, 1);
+            bus_wram_write16(0x0196 + px, 1);
+        }
+    }
+}
+
+/*
+ * $84:F581 — Sprite flag processing for P1/P2
+ */
+static void smk_84_F581(void) {
+    /* Stub — processes sprite slot flags at $10E2/$11E2.
+     * Not critical for basic character selection. */
+}
+
+/*
+ * $84:F48D — Animation parameter update
+ * Updates cursor animation parameters ($9A/$9C) based on confirm state.
+ */
+static void smk_84_F48D(void) {
+    uint16_t p1_confirm = bus_wram_read16(g_cpu.DP + 0x70) & 3;
+    uint16_t anim_counter = bus_wram_read16(g_cpu.DP + 0x98);
+
+    if (p1_confirm == 0 && anim_counter == 5) {
+        bus_wram_write16(g_cpu.DP + 0x9A, 0x0802);
+    } else {
+        bus_wram_write16(g_cpu.DP + 0x9A, 0x1815);
+    }
+
+    /* P2 animation */
+    uint16_t e66 = bus_wram_read16(0x0E66);
+    uint16_t mode = bus_wram_read16(0x002E);
+    if (e66 == 0 && mode == 0) {
+        /* 1P mode, no P2 cursor */
+    } else {
+        uint16_t p2_confirm = bus_wram_read16(g_cpu.DP + 0x72) & 3;
+        if (p2_confirm == 0 && anim_counter == 5) {
+            bus_wram_write16(g_cpu.DP + 0x9C, 0x0802);
+        } else {
+            if (e66 != 0) {
+                bus_wram_write16(g_cpu.DP + 0x9C, 0x1C4C);
+            } else {
+                bus_wram_write16(g_cpu.DP + 0x9C, 0x1C17);
+            }
+        }
+    }
+
+    /* Increment animation counter, wrap at 6 */
+    anim_counter++;
+    if (anim_counter >= 6) anim_counter = 0;
+    bus_wram_write16(g_cpu.DP + 0x98, anim_counter);
+}
+
+/*
+ * $85:90B1 — Mode select per-frame logic
+ *
+ * Called from state $06 main loop handler.
+ * Processes button input, updates cursor, handles mode selection.
+ *
+ * Original: PHB/PHK/PLB, 10 sub-calls, PLB/RTL
+ */
+void smk_8590B1(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x85);
+
+    smk_85_92F9();    /* Input processing */
+    /* JSR $935B — cursor update (P2 battle mode only, stub for now) */
+    smk_85_9348();    /* Animation counters */
+    smk_85_939F();    /* D-pad selection */
+    smk_84_F4E6();    /* Y button toggle */
+    smk_84_F581();    /* Sprite flag processing (stub) */
+    smk_84_F48D();    /* Animation params */
+    smk_85_9487();    /* Confirm/cancel */
+
+    /* In 1P mode ($2E=0), auto-confirm P2 when P1 is confirmed */
+    {
+        uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2E);
+        if (mode == 0) {
+            uint16_t p1_state = bus_wram_read16(g_cpu.DP + 0x70);
+            if (p1_state == 2) {
+                bus_wram_write16(g_cpu.DP + 0x72, 2);
+            }
+        }
+    }
+
+    smk_85_965B();    /* Transition trigger */
+    smk_85_9561();    /* OAM rendering */
+
+    g_cpu.DB = saved_db;
+}
+
+/*
+ * $85:90D7 — Mode select NMI rendering
+ *
+ * Called from NMI state $06 handler.
+ * Handles sprite DMA, BG scroll updates, HDMA for mode select screen.
+ *
+ * Original: PHB/PHK/PLB, JSL $81CB35, multiple DMA/scroll pairs, PLB/RTL
+ */
+void smk_8590D7(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x85);
+
+    /* JSL $81CB35 — sprite tile DMA */
+    smk_81CB35();
+
+    /* VRAM cursor updates for P1 and P2 */
+    for (uint16_t px = 0; px <= 2; px += 2) {
+        /* $96D6: Set VRAM addr to old selection position */
+        uint16_t old_pos = bus_wram_read16(g_cpu.DP + 0x74 + px);
+        bus_write16(0x85, 0x2116, old_pos);
+
+        /* $96EC: Clear old cursor (write background pattern) */
+        uint16_t bg_pat = bus_wram_read16(g_cpu.DP + 0x84);
+        bus_write16(0x00, 0x2118, bg_pat);
+        bus_write16(0x00, 0x2118, bg_pat + 1);
+
+        /* $96DC: Set VRAM addr to new selection position */
+        uint16_t new_pos = bus_wram_read16(g_cpu.DP + 0x7E + px);
+        bus_write16(0x85, 0x2116, new_pos);
+
+        /* $96E2: Draw new cursor */
+        uint16_t cursor_pat = bus_wram_read16(g_cpu.DP + 0x78 + px);
+        bus_write16(0x00, 0x2118, cursor_pat);
+        bus_write16(0x00, 0x2118, cursor_pat + 1);
+    }
+
+    /* $96F6/$96FC: VRAM portrait tile updates for P1 */
+    for (uint16_t px = 0; px <= 2; px += 2) {
+        uint16_t vram_addr = bus_wram_read16(g_cpu.DP + 0x86 + px);
+        bus_write16(0x85, 0x2116, vram_addr);
+
+        /* Read from portrait table based on selection */
+        uint16_t sel_idx = bus_wram_read16(0x0180 + px);
+        uint16_t table_ptr = bus_read16(0x85, 0x9241 + sel_idx);
+        for (int i = 0; i < 4; i++) {
+            uint16_t tile = bus_read16(0x00, table_ptr + i * 2);
+            bus_write16(0x00, 0x2118, tile);
+        }
+    }
+
+    /* $9717/$971F: Character sprite area updates */
+    for (uint16_t px = 0; px <= 2; px += 2) {
+        uint16_t sprite_addr = bus_wram_read16(g_cpu.DP + 0x8C + px);
+        bus_wram_write16(g_cpu.DP + 0x92, sprite_addr);
+        bus_write16(0x85, 0x2116, sprite_addr);
+
+        uint16_t draw_mode = bus_wram_read16(0x0184 + px);
+        if (draw_mode == 0) {
+            /* Fill character portrait area (6×4 + 6×4 tiles) */
+            uint16_t addr = sprite_addr;
+            for (int row = 0; row < 4; row++) {
+                for (int col = 0; col < 6; col++) {
+                    bus_write16(0x00, 0x2118, 0x281C);
+                }
+                addr += 0x20;
+                bus_wram_write16(g_cpu.DP + 0x92, addr);
+                bus_write16(0x85, 0x2116, addr);
+            }
+            for (int row = 0; row < 4; row++) {
+                for (int col = 0; col < 6; col++) {
+                    bus_write16(0x00, 0x2118, 0x2410);
+                }
+                addr += 0x20;
+                bus_wram_write16(g_cpu.DP + 0x92, addr);
+                bus_write16(0x85, 0x2116, addr);
+            }
+        }
+    }
+
+    /* $978F: Cursor animation data write */
+    for (uint16_t px = 0; px <= 2; px += 2) {
+        /* Check conditions for second player */
+        if (px == 2) {
+            uint16_t e66 = bus_wram_read16(0x0E66);
+            if (e66 == 0) {
+                uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2E);
+                if (mode == 0) continue;  /* Skip P2 in 1P mode */
+            }
+        }
+        uint16_t anim = bus_wram_read16(g_cpu.DP + 0x9A + px);
+        bus_write16(0x00, 0x2118, anim);
+        bus_write16(0x00, 0x2118, anim + 1);
+    }
+
+    /* BG scroll writes */
+    op_sep(0x20);
+    op_lda_dp8(0x61);
+    op_sta_long8(0x00, 0x210F);  /* BG1HOFS low */
+    op_lda_dp8(0x62);
+    op_sta_long8(0x00, 0x210F);  /* BG1HOFS high */
+    op_lda_dp8(0x64);
+    op_sta_long8(0x00, 0x2111);  /* BG2VOFS low */
+    op_lda_dp8(0x65);
+    op_sta_long8(0x00, 0x2111);  /* BG2VOFS high */
+    op_rep(0x20);
 
     g_cpu.DB = saved_db;
 }

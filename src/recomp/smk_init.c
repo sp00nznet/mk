@@ -299,6 +299,104 @@ void smk_81E067(void) {
     g_cpu.DB = saved_db;
 }
 
+/*
+ * $81:E126 — Transition handler for state $06 (character select)
+ *
+ * Original:
+ *   JSR $E118    ; load tilemap
+ *   JSL $85909B  ; character select init
+ *   RTS
+ */
+void smk_81E126(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x81);
+    op_rep(0x30);
+
+    smk_81E118();
+    smk_85909B();
+
+    g_cpu.DB = saved_db;
+}
+
+/*
+ * $81:E398 — Transition handler for state $14 (mode select)
+ *
+ * Original:
+ *   JSR $E3A0    ; graphics loading + setup
+ *   JSL $088BF5  ; PPU init
+ *   RTS
+ *
+ * $E3A0 calls:
+ *   JSR $E68E → JSR $E6B9 (decompress $C4:0000 → $7F:0000)
+ *             → DMA $7F:0070 → VRAM $3000 (4KB, VMDATAH)
+ *   JSR $EC5E → mode config lookup
+ *   JSR $E627 → more graphics loading
+ */
+void smk_81E398(void) {
+    uint8_t saved_db = g_cpu.DB;
+    OP_SET_DB(0x81);
+    op_rep(0x30);
+
+    /* JSR $E6B9 — Decompress mode select data from $C4:0000 → $7F:0000 */
+    g_cpu.Y = 0x0000;
+    CPU_SET_A16(0x00C4);
+    g_cpu.X = 0x0000;
+    smk_84E09E();
+
+    /* DMA $7F:0070 → VRAM $3000 (4KB, high bytes via VMDATAH) */
+    op_rep(0x30);
+    bus_write16(0x81, 0x2115, 0x0080);  /* VMAIN=$80 */
+    bus_write16(0x81, 0x2116, 0x3000);  /* VMADD=$3000 */
+    bus_write16(0x81, 0x4300, 0x0000);  /* STZ: ctrl=$00, dest=$00 */
+    bus_write16(0x81, 0x4301, 0x0019);  /* dest=$19 (VMDATAH), src_lo=$00 */
+    bus_write16(0x81, 0x4303, 0x7F70);  /* src=$7F:0070 */
+    bus_write16(0x81, 0x4305, 0x1000);  /* size=$1000 (4KB) */
+    bus_write16(0x81, 0x420B, 0x0001);  /* trigger DMA ch0 */
+
+    /* JSR $EC5E — Mode config lookup (set $0126 from table) */
+    {
+        uint16_t idx = bus_wram_read16(0x0124);
+        uint8_t val = bus_read8(0x81, 0xEC2F + idx);
+        bus_wram_write16(0x0126, val);
+    }
+
+    /* JSL $088BF5 — PPU register init (shared with $808BEA, entry at $8BF5)
+     * Clears windows, sets TM=$10, clears color math, DMAs font tiles. */
+    op_sep(0x30);
+
+    /* Clear window registers */
+    bus_write8(0x80, 0x2123, 0x00);  /* W12SEL */
+    bus_write8(0x80, 0x2124, 0x00);  /* W34SEL */
+    bus_write8(0x80, 0x2125, 0x00);  /* WOBJSEL */
+    bus_write8(0x80, 0x212C, 0x10);  /* TM: OBJ only */
+    bus_write8(0x80, 0x212D, 0x10);  /* TS: OBJ only */
+    bus_write8(0x80, 0x212E, 0x00);  /* TMW */
+    bus_write8(0x80, 0x212F, 0x00);  /* TSW */
+    bus_write8(0x80, 0x2133, 0x00);  /* SETINI */
+    bus_write8(0x80, 0x2130, 0x00);  /* CGWSEL */
+    bus_write8(0x80, 0x2131, 0x00);  /* CGADSUB */
+    bus_write8(0x80, 0x2132, 0x00);  /* COLDATA */
+
+    /* DMA font tiles from $84:C500 → VRAM $4000 (1KB) */
+    op_rep(0x30);
+    bus_write16(0x80, 0x2115, 0x0080);
+    bus_write16(0x80, 0x2116, 0x4000);
+    bus_write16(0x80, 0x4300, 0x1801);
+    bus_write16(0x80, 0x4302, 0xC500);
+    bus_write16(0x80, 0x4304, 0x0084);
+    bus_write16(0x80, 0x4305, 0x0400);
+    bus_write16(0x80, 0x420B, 0x0001);
+
+    /* OAM DMA + brightness */
+    smk_80946E();
+    op_sep(0x20);
+    bus_write8(0x80, 0x2100, 0x0F);  /* Full brightness */
+    op_rep(0x30);
+
+    g_cpu.DB = saved_db;
+    printf("smk: mode select transition (state $14) complete\n");
+}
+
 /* Register all recompiled functions */
 void smk_register_all(void) {
     func_table_register(0x80FF70, smk_80FF70);
@@ -338,5 +436,27 @@ void smk_register_all(void) {
     func_table_register(0x858045, smk_858045);  /* per-frame sprite update */
     func_table_register(0x81CB35, smk_81CB35);  /* NMI sprite tile DMA (stub) */
 
-    printf("smk: registered %d recompiled functions\n", 30);
+    /* Joypad + title input */
+    func_table_register(0x80843C, smk_80843C);  /* joypad reading */
+    func_table_register(0x80853D, smk_80853D);  /* title screen input */
+
+    /* State $14 — mode select */
+    func_table_register(0x81E398, smk_81E398);  /* transition $14 handler */
+    func_table_register(0x808174, smk_808174);  /* state $14 main handler */
+    func_table_register(0x808369, smk_808369);  /* NMI state $14 */
+
+    /* State $06 — character select */
+    func_table_register(0x81E126, smk_81E126);  /* transition $06 handler */
+    func_table_register(0x8080CA, smk_8080CA);  /* state $06 main handler */
+    func_table_register(0x80824D, smk_80824D);  /* NMI state $06 */
+    func_table_register(0x84F421, smk_84F421);  /* viewport/HDMA setup */
+    func_table_register(0x84F45A, smk_84F45A);  /* PPU Mode 0 setup */
+    func_table_register(0x8591DE, smk_8591DE);  /* mode select display setup */
+    func_table_register(0x85915F, smk_85915F);  /* tile DMA + palette */
+    func_table_register(0x859239, smk_859239);  /* sprite slot init */
+    func_table_register(0x85909B, smk_85909B);  /* mode select init */
+    func_table_register(0x8590B1, smk_8590B1);  /* mode select main logic */
+    func_table_register(0x8590D7, smk_8590D7);  /* mode select NMI rendering */
+
+    printf("smk: registered %d recompiled functions\n", 46);
 }
