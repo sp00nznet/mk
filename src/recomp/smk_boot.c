@@ -264,32 +264,81 @@ void smk_80824D(void) {
 /*
  * $80:8174 — State handler for state $14 (mode select main loop)
  *
- * Original calls JSL $088C1A which has complex PPU/DMA/OAM operations.
- * Simplified here to avoid stack issues from shared entry points.
+ * Original: INC $38; JSL $088C1A; RTS
+ * $088C1A does: font DMA, CGRAM palette DMA, $81:94C2 (animation),
+ * 4 cursor OAM sprites, OAM high table, OAM DMA, brightness=$0F.
+ *
+ * Input handling is added here (original handles it elsewhere).
  */
 void smk_808174(void) {
     op_rep(0x30);
     op_inc_dp16(0x38);
 
-    /* DMA font tiles from $84:C500 to VRAM $4000 (1KB) */
-    bus_write16(0x80, 0x2115, 0x0080);  /* VMAIN=$80 */
-    bus_write16(0x80, 0x2116, 0x4000);  /* VMADD=$4000 */
-    bus_write16(0x80, 0x4300, 0x1801);  /* DMA ctrl=$01 (word), dest=$18 */
-    bus_write16(0x80, 0x4302, 0xC500);  /* src addr=$C500 */
-    bus_write16(0x80, 0x4304, 0x0084);  /* src bank=$84 */
-    bus_write16(0x80, 0x4305, 0x0400);  /* size=$0400 */
-    bus_write16(0x80, 0x420B, 0x0001);  /* trigger DMA ch0 */
+    /* === JSL $088C1A implementation === */
 
-    /* OAM DMA */
+    /* 1. Font DMA: $84:C500 → VRAM $4000 (1KB, mode 1) */
+    bus_write16(0x80, 0x2115, 0x0080);
+    bus_write16(0x80, 0x2116, 0x4000);
+    bus_write16(0x80, 0x4300, 0x1801);
+    bus_write16(0x80, 0x4302, 0xC500);
+    bus_write16(0x80, 0x4304, 0x0084);
+    bus_write16(0x80, 0x4305, 0x0400);
+    bus_write16(0x80, 0x420B, 0x0001);
+
+    /* 2. CGRAM palette: decompress $C4:$1313 → $7E:$3A80, DMA → CGRAM */
+    {
+        extern void sub_df48(uint16_t, uint16_t, uint8_t);
+        sub_df48(0x3A80, 0x1313, 0xC4);
+
+        op_rep(0x30);
+        bus_write16(0x80, 0x4305, 0x0200);
+        bus_write16(0x80, 0x4302, 0x3A80);
+        bus_write16(0x80, 0x4300, 0x2202);
+        op_sep(0x20);
+        bus_write8(0x80, 0x2121, 0x00);
+        bus_write8(0x80, 0x4304, 0x7E);
+        bus_write8(0x80, 0x420B, 0x01);
+        op_rep(0x30);
+    }
+
+    /* 3. $B93E → $81:94C2 (hardware multiply / animation — stub for now) */
+
+    /* 4. Set 4 cursor OAM sprites from $8C7D table.
+     * Y position based on current mode selection ($2C):
+     *   mode 0 (GP):     Y=$60
+     *   mode 2 (Match):  Y=$70
+     *   mode 4 (Battle): Y=$80 */
+    {
+        uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2C);
+        uint8_t cursor_y = 0x70;  /* default center */
+        if (mode == 0) cursor_y = 0x60;
+        else if (mode == 4) cursor_y = 0x80;
+
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            uint8_t oam[16] = {
+                0x60, cursor_y, 0x00, 0x30,
+                0x70, cursor_y, 0x02, 0x30,
+                0x80, cursor_y, 0x04, 0x30,
+                0x90, cursor_y, 0x06, 0x30,
+            };
+            for (int i = 0; i < 16; i++)
+                wram[0x0200 + i] = oam[i];
+            /* OAM high table */
+            wram[0x0400] = 0xAA;
+            wram[0x0401] = 0x55;
+        }
+    }
+
+    /* 5. OAM DMA */
     smk_80946E();
 
-    /* Set full brightness */
+    /* 6. Brightness */
     op_sep(0x20);
     bus_write8(0x80, 0x2100, 0x0F);
-    op_rep(0x20);
+    op_rep(0x30);
 
-    /* Simple mode select input handling:
-     * D-pad up/down to change mode ($2C), B/Start to confirm */
+    /* === Input handling (simplified) === */
     uint16_t fade = bus_wram_read16(g_cpu.DP + 0x48);
     if (fade == 0) {
         uint16_t edge = bus_wram_read16(g_cpu.DP + 0x28);
@@ -304,11 +353,7 @@ void smk_808174(void) {
         bus_wram_write16(g_cpu.DP + 0x2C, mode);
 
         if (edge & 0x9000) {  /* B or START — confirm */
-            /* Set game mode: $2C=0→1P GP, $2C=2→Match Race, $2C=4→Battle */
-            /* Set player mode: $2E=0 for 1P */
             bus_wram_write16(g_cpu.DP + 0x2E, 0);
-
-            /* Transition to state $06 (character select) */
             bus_wram_write16(g_cpu.DP + 0x32, 0x0006);
             bus_wram_write16(0x015E, 0x0060);
             bus_wram_write16(g_cpu.DP + 0x48, 0x8F00);

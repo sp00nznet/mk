@@ -1518,6 +1518,517 @@ void smk_84FD25(void) {
 }
 
 /* ===================================================================
+ * Mode select graphics loading chain ($81:E627)
+ *
+ * Called during state $14 (mode select) transition to load all BG
+ * tile data, tilemaps, and palettes into VRAM for Mode 0 display.
+ *
+ * E627 → E631 (BG graphics) → E63F (palettes) → E72E (BG config)
+ * =================================================================== */
+
+/*
+ * $81:E84C — Compute 3-byte table index from $0126
+ * Returns X = ($0126 >> 1) + $0126 = 1.5 × $0126
+ */
+static uint16_t compute_idx_0126(void) {
+    uint16_t val = bus_wram_read16(0x0126);
+    return (val >> 1) + val;
+}
+
+/*
+ * $81:E64A — Compute 3-byte table index from $0124
+ * Returns X = ($0124 << 1) + $0124 = 3 × $0124
+ */
+static uint16_t compute_idx_0124(void) {
+    uint16_t val = bus_wram_read16(0x0124);
+    return (val << 1) + val;
+}
+
+/*
+ * $81:E836 — DMA helper: transfer from $7F:src to VRAM
+ *
+ * Entry: A(vram_addr) = VRAM destination, Y(src_off) = source offset in $7F,
+ *        X(size) = transfer size.
+ * DMA ctrl/dest must be pre-configured in $4300/$4301 by caller.
+ */
+static void dma_helper_e836(uint16_t vram_addr, uint16_t src_off, uint16_t size) {
+    /* STY $4302 — source address low/mid */
+    bus_write16(0x81, 0x4302, src_off);
+    /* STA $2116 — VRAM address */
+    bus_write16(0x81, 0x2116, vram_addr);
+    /* LDA #$007F; STA $4304 — source bank $7F */
+    bus_write16(0x81, 0x4304, 0x007F);
+    /* STX $4305 — transfer size */
+    bus_write16(0x81, 0x4305, size);
+    /* Trigger DMA ch0 */
+    bus_write16(0x81, 0x420B, 0x0001);
+}
+
+/*
+ * $84:E378 — Post-processing nibble expansion
+ *
+ * Expands packed 4-bit pixel data into 8-bit color-indexed bytes.
+ * For each row: palette byte from source[row], pixel data from source+$100.
+ * Each packed byte → 2 output bytes (low nibble, high nibble), ORed with palette.
+ *
+ * Entry: X = source base offset in $7F, Y = dest base offset in $7F,
+ *        A = row count
+ */
+void smk_84E378(uint16_t src_base, uint16_t dst_base, uint16_t row_count) {
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+
+    uint8_t *buf = wram + 0x10000;  /* $7F bank */
+    uint16_t out_y = 0;
+
+    for (uint16_t row = 0; row < row_count; row++) {
+        /* Palette byte from source[row] (via indirect long [$06],Y) */
+        uint8_t palette = buf[(uint16_t)(src_base + row)];
+
+        /* Pixel data starts at source + $0100 + row*32 */
+        uint16_t px_base = (uint16_t)(src_base + 0x0100 + row * 32);
+
+        for (int col = 0; col < 32; col++) {
+            uint8_t packed = buf[(uint16_t)(px_base + col)];
+
+            /* Low nibble */
+            uint8_t lo = packed & 0x0F;
+            buf[(uint16_t)(dst_base + out_y)] = (lo != 0) ? (lo | palette) : 0;
+            out_y++;
+
+            /* High nibble */
+            uint8_t hi = (packed >> 4) & 0x0F;
+            buf[(uint16_t)(dst_base + out_y)] = (hi != 0) ? (hi | palette) : 0;
+            out_y++;
+        }
+    }
+    printf("smk: E378 nibble expand $7F:%04X → $7F:%04X (%d rows, %d bytes)\n",
+           src_base, dst_base, row_count, out_y);
+}
+
+/*
+ * $81:E6B9 — Decompress $C4:0000 + post-process
+ *
+ * 1. Decompress from $C4:0000 → $7F:0000 (via $84:E09E)
+ * 2. Post-process nibble expand → $7F:7000 (via $84:E378)
+ */
+static void sub_e6b9(void) {
+    /* Decompress $C4:0000 → $7F:0000 */
+    g_cpu.Y = 0x0000;
+    CPU_SET_A16(0x00C4);
+    g_cpu.X = 0x0000;
+    smk_84E09E();
+
+    /* Post-process: X=0, Y=$7000, A=$40 (64 rows) */
+    smk_84E378(0x0000, 0x7000, 0x0040);
+}
+
+/*
+ * $81:E68E — Decompress + DMA to VRAM $3000
+ *
+ * Calls E6B9 (decompress $C4:0000 → $7F:0000, then nibble-expand → $7F:7000),
+ * then DMAs $7F:7000 → VRAM $3000 (4KB, high bytes via VMDATAH).
+ *
+ * Register chaining: STA $4301 with $0019 sets $4301=$19,$4302=$00.
+ * Then STA $4303 with $7F70 sets $4303=$70,$4304=$7F.
+ * Source addr = $4302|($4303<<8) = $0000|($70<<8) = $7000. Bank=$7F.
+ */
+static void sub_e68e(void) {
+    sub_e6b9();
+
+    op_rep(0x30);
+    bus_write16(0x81, 0x2115, 0x0080);  /* VMAIN=$80 */
+    bus_write16(0x81, 0x2116, 0x3000);  /* VMADD=$3000 */
+    bus_write16(0x81, 0x4300, 0x0000);  /* ctrl=$00 */
+    bus_write16(0x81, 0x4301, 0x0019);  /* dest=$19, src_lo=$00 */
+    bus_write16(0x81, 0x4303, 0x7F70);  /* src_hi=$70, bank=$7F → $7F:7000 */
+    bus_write16(0x81, 0x4305, 0x1000);  /* size=4KB */
+    bus_write16(0x81, 0x420B, 0x0001);
+}
+
+/*
+ * $81:E6D4 — Multi-bank graphics decompression
+ *
+ * Decompresses 3-4 graphics blocks from various ROM banks using
+ * lookup tables indexed by $0126. Includes nibble expansion step.
+ */
+static void sub_e6d4(void) {
+    uint16_t x;
+
+    /* === Block 1: table at $81:EBA3 === */
+    x = compute_idx_0126();
+    {
+        uint16_t y_val = bus_read16(0x81, 0xEBA3 + x);     /* VRAM/dest offset */
+        uint16_t bank_raw = bus_read16(0x81, 0xEBA5 + x);
+        uint8_t bank = bank_raw & 0xFF;
+
+        /* Decompress from bank:$C000 → $7F:C000 */
+        g_cpu.Y = y_val;
+        CPU_SET_A16(bank);
+        g_cpu.X = 0xC000;
+        smk_84E09E();
+    }
+
+    /* Post-process: nibble expand $7F:C000 → $7F:4000 (192 rows) */
+    smk_84E378(0xC000, 0x4000, 0x00C0);
+
+    /* === Block 2: table at $81:EBEB === */
+    x = compute_idx_0126();
+    {
+        uint16_t y_val = bus_read16(0x81, 0xEBEB + x);
+        uint16_t bank_raw = bus_read16(0x81, 0xEBED + x);
+        uint8_t bank = bank_raw & 0xFF;
+
+        g_cpu.Y = y_val;
+        CPU_SET_A16(bank);
+        g_cpu.X = 0xC800;
+        smk_84E09E();
+    }
+
+    /* === Block 3: fixed — $C1:12F8 → $7F:D000 === */
+    g_cpu.Y = 0x12F8;
+    CPU_SET_A16(0x00C1);
+    g_cpu.X = 0xD000;
+    smk_84E09E();
+
+    /* === Block 4: table at $81:EC03 === */
+    x = compute_idx_0126();
+    {
+        uint16_t y_val = bus_read16(0x81, 0xEC03 + x);
+        uint16_t bank_raw = bus_read16(0x81, 0xEC05 + x);
+        uint8_t bank = bank_raw & 0xFF;
+
+        g_cpu.Y = y_val;
+        CPU_SET_A16(bank);
+        g_cpu.X = 0xC000;
+        smk_84E09E();
+    }
+
+    printf("smk: E6D4 multi-bank decompression complete\n");
+}
+
+/*
+ * $81:E7DA — Tilemap DMA helper #1
+ * DMA $7F:C000 (1536 bytes, mode 1) → VRAM $7800
+ *
+ * Original: LDX #$0600, LDA #$7800, LDY #$C000, JSR E836
+ * E836: Y→$4302 (src), A→$2116 (VRAM), X→$4305 (size)
+ */
+static void sub_e7da(void) {
+    bus_write16(0x81, 0x2115, 0x0080);  /* VMAIN=$80 */
+    bus_write16(0x81, 0x4300, 0x1801);  /* ctrl=$01 (mode 1), dest=$18 */
+    bus_write16(0x81, 0x4302, 0x0000);  /* clear low */
+    dma_helper_e836(0x7800, 0xC000, 0x0600);
+}
+
+/*
+ * $81:E7F6 — Tilemap DMA helper #2
+ * 4 sequential DMA transfers of tilemap fragments:
+ *
+ * Original parameters (LDX=size, LDA=VRAM, LDY=src):
+ *   $7F:C100 (768B) → VRAM $7C00
+ *   $7F:C000 (256B) → VRAM $7D80
+ *   $7F:C500 (256B) → VRAM $7E00
+ *   $7F:C400 (256B) → VRAM $7E80
+ */
+static void sub_e7f6(void) {
+    bus_write16(0x81, 0x2115, 0x0080);
+    bus_write16(0x81, 0x4300, 0x1801);  /* mode 1 */
+    bus_write16(0x81, 0x4302, 0x0000);
+
+    dma_helper_e836(0x7C00, 0xC100, 0x0300);
+    dma_helper_e836(0x7D80, 0xC000, 0x0100);
+    dma_helper_e836(0x7E00, 0xC500, 0x0100);
+    dma_helper_e836(0x7E80, 0xC400, 0x0100);
+}
+
+/*
+ * $81:E769 — Tilemap DMA chain
+ *
+ * Two main DMA transfers + two helpers:
+ * 1. $7F:4000 (12KB high bytes) → VRAM $0000
+ * 2. $7F:C800 (4KB mode 1) → VRAM $7000
+ * 3. E7DA: $7F:C000 → VRAM $7800
+ * 4. E7F6: fragments → VRAM $7C00-$7E80
+ *
+ * Note on register chaining: 16-bit writes to $43XX set consecutive bytes.
+ * Source address = $4302(lo) | $4303(hi)<<8, bank = $4304.
+ */
+static void sub_e769(void) {
+    /* DMA #1: $7F:4000 → VRAM $0000, 12KB, high bytes only
+     * Original: STZ $4300 ($4300=$00,$4301=$00)
+     *           LDA #$0019; STA $4301 ($4301=$19,$4302=$00)
+     *           LDA #$7F40; STA $4303 ($4303=$40,$4304=$7F)
+     *           → src = $7F:4000, dest = VMDATAH */
+    bus_write16(0x81, 0x2115, 0x0080);  /* VMAIN=$80 */
+    bus_write16(0x81, 0x2116, 0x0000);  /* VMADD=$0000 */
+    bus_write16(0x81, 0x4300, 0x0000);  /* ctrl=$00, dest=$00 (overwritten next) */
+    bus_write16(0x81, 0x4301, 0x0019);  /* dest=$19 (VMDATAH), src_lo=$00 */
+    bus_write16(0x81, 0x4303, 0x7F40);  /* src_hi=$40, bank=$7F → $7F:4000 */
+    bus_write16(0x81, 0x4305, 0x3000);  /* size=12KB */
+    bus_write16(0x81, 0x420B, 0x0001);
+
+    /* DMA #2: $7F:C800 → VRAM $7000, 4KB, mode 1 (VMDATAL+VMDATAH)
+     * Original: LDA #$1801; STA $4300 ($4300=$01,$4301=$18)
+     *           STZ $4302 ($4302=$00,$4303=$00)
+     *           LDA #$7FC8; STA $4303 ($4303=$C8,$4304=$7F)
+     *           → src = $7F:C800 */
+    bus_write16(0x81, 0x2116, 0x7000);  /* VMADD=$7000 */
+    bus_write16(0x81, 0x4300, 0x1801);  /* ctrl=$01 (mode 1), dest=$18 */
+    bus_write16(0x81, 0x4302, 0x0000);  /* clear src_lo, src_hi */
+    bus_write16(0x81, 0x4303, 0x7FC8);  /* src_hi=$C8, bank=$7F → $7F:C800 */
+    bus_write16(0x81, 0x4305, 0x1000);  /* size=4KB */
+    bus_write16(0x81, 0x420B, 0x0001);
+
+    /* DMA #3-#7: tilemap fragments */
+    sub_e7da();
+    sub_e7f6();
+
+    printf("smk: E769 tilemap DMAs complete\n");
+}
+
+/*
+ * $81:E745 — Palette data decompression
+ *
+ * Double-decompression: ROM → $7F:C000 → re-decompress → $7F:0000
+ * Uses table at $81:EB5B indexed by $0124.
+ */
+static void sub_e745(void) {
+    uint16_t x = compute_idx_0124();
+
+    /* First decompress: table lookup → $7F:C000 */
+    {
+        uint16_t y_val = bus_read16(0x81, 0xEB5B + x);
+        uint16_t bank_raw = bus_read16(0x81, 0xEB5D + x);
+        uint8_t bank = bank_raw & 0xFF;
+
+        g_cpu.Y = y_val;
+        CPU_SET_A16(bank);
+        g_cpu.X = 0xC000;
+        smk_84E09E();
+    }
+
+    /* Second decompress: $7F:C000 → $7F:0000
+     * Source = $7F:C000 (the just-decompressed data), dest = $7F:0000 */
+    g_cpu.Y = 0xC000;
+    CPU_SET_A16(0x007F);
+    g_cpu.X = 0x0000;
+    smk_84E09E();
+
+    printf("smk: E745 palette double-decompression complete\n");
+}
+
+/*
+ * $81:E7B5 — DMA palette/tile data to VRAM low bytes
+ *
+ * DMA $7F:0000 (16KB) → VRAM $0000 (low bytes, VMDATAL)
+ * VMAIN=$0000: increment after low byte write
+ */
+static void sub_e7b5(void) {
+    bus_write16(0x81, 0x4300, 0x0000);  /* ctrl=$00 (1-reg) */
+    bus_write16(0x81, 0x2115, 0x0000);  /* VMAIN=$00 (inc after low) */
+    bus_write16(0x81, 0x2116, 0x0000);  /* VMADD=$0000 */
+    bus_write16(0x81, 0x4301, 0x0018);  /* dest=$18 (VMDATAL) */
+    bus_write16(0x81, 0x4303, 0x7F00);  /* src=$7F:0000 */
+    bus_write16(0x81, 0x4305, 0x4000);  /* size=16KB */
+    bus_write16(0x81, 0x420B, 0x0001);
+}
+
+/*
+ * $84:DF48 — BG configuration data decompressor
+ *
+ * Reads a compressed data stream from ROM and decompresses to $7E bank (WRAM).
+ * Same compression format as $84:E09E but targets $7E:XXXX instead of $7F:XXXX.
+ *
+ * Entry: DP $0E = output start, DP $10 = data pointer, DB = data bank
+ */
+void sub_df48(uint16_t out_start, uint16_t data_ptr, uint8_t data_bank) {
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+
+    uint16_t out_pos = out_start;
+    uint16_t src_pos = data_ptr;
+
+    while (1) {
+        uint8_t cmd = bus_read8(data_bank, src_pos++);
+        if (cmd == 0xFF) break;
+
+        uint8_t mode;
+        uint16_t count;
+
+        if ((cmd & 0xE0) == 0xE0) {
+            /* Extended command: mode from cmd<<3, 10-bit count */
+            mode = (cmd << 3) & 0xE0;
+            uint8_t lo = bus_read8(data_bank, src_pos++);
+            count = (lo | ((uint16_t)(cmd & 0x03) << 8)) + 1;
+        } else {
+            mode = cmd & 0xE0;
+            count = (cmd & 0x1F) + 1;
+        }
+
+        switch (mode) {
+        case 0x00:
+            /* Raw copy from stream to output */
+            for (uint16_t i = 0; i < count; i++) {
+                wram[out_pos++] = bus_read8(data_bank, src_pos++);
+            }
+            break;
+
+        case 0x20:
+            /* RLE fill */
+            {
+                uint8_t fill = bus_read8(data_bank, src_pos++);
+                for (uint16_t i = 0; i < count; i++) {
+                    wram[out_pos++] = fill;
+                }
+            }
+            break;
+
+        case 0x40:
+            /* Word fill: alternate 2 bytes */
+            {
+                uint8_t b0 = bus_read8(data_bank, src_pos++);
+                uint8_t b1 = bus_read8(data_bank, src_pos++);
+                for (uint16_t i = count; i > 0; ) {
+                    wram[out_pos++] = b0; i--;
+                    if (i == 0) break;
+                    wram[out_pos++] = b1; i--;
+                }
+            }
+            break;
+
+        case 0x60:
+            /* Incrementing fill */
+            {
+                uint8_t val = bus_read8(data_bank, src_pos++);
+                for (uint16_t i = 0; i < count; i++) {
+                    wram[out_pos++] = val++;
+                }
+            }
+            break;
+
+        case 0x80:
+            /* Back-reference: 16-bit offset + out_start */
+            {
+                uint16_t ref = bus_read8(data_bank, src_pos);
+                ref |= (uint16_t)bus_read8(data_bank, src_pos + 1) << 8;
+                src_pos += 2;
+                ref += out_start;
+                for (uint16_t i = 0; i < count; i++) {
+                    wram[out_pos] = wram[ref];
+                    out_pos++; ref++;
+                }
+            }
+            break;
+
+        case 0xA0:
+            /* Back-reference with XOR */
+            {
+                uint16_t ref = bus_read8(data_bank, src_pos);
+                ref |= (uint16_t)bus_read8(data_bank, src_pos + 1) << 8;
+                src_pos += 2;
+                ref += out_start;
+                for (uint16_t i = 0; i < count; i++) {
+                    wram[out_pos] = wram[ref] ^ 0xFF;
+                    out_pos++; ref++;
+                }
+            }
+            break;
+
+        case 0xC0:
+        case 0xE0:
+            /* Byte-offset back-reference */
+            {
+                uint8_t offset = bus_read8(data_bank, src_pos++);
+                uint16_t ref = out_pos - offset;
+                bool invert = (mode == 0xE0);
+                for (uint16_t i = 0; i < count; i++) {
+                    uint8_t val = wram[ref++];
+                    wram[out_pos++] = invert ? (val ^ 0xFF) : val;
+                }
+            }
+            break;
+        }
+    }
+
+    printf("smk: DF48 decompress $%02X:%04X → $7E:%04X (size=%04X)\n",
+           data_bank, data_ptr, out_start, out_pos - out_start);
+}
+
+/*
+ * $81:E631 — BG tilemap/graphics loading chain
+ *
+ * Calls: E68E (decompress+DMA), E6D4 (multi-bank), E769 (tilemap DMAs),
+ *        $83:F2C3 (mode-specific dispatch)
+ */
+static void sub_e631(void) {
+    sub_e68e();
+    sub_e6d4();
+    sub_e769();
+
+    /* $83:F2C3 — mode-specific tile loading dispatcher
+     * Uses table at $83:F000 indexed by $0126.
+     * Stub for now — loads additional mode-specific graphics. */
+    {
+        uint16_t idx = bus_wram_read16(0x0126);
+        printf("smk: $83:F2C3 stub — mode-specific tile loader ($0126=%04X)\n", idx);
+    }
+}
+
+/*
+ * $81:E63F — Palette and tile graphics chain
+ *
+ * Calls: E745 (palette decompress), $84:F147 (palette check), E7B5 (VRAM DMA)
+ */
+static void sub_e63f(void) {
+    sub_e745();
+
+    /* $84:F147 — palette bounds check (stub: just continue) */
+    /* Original checks if DP $32 < $10, then does additional setup.
+     * For initial mode select rendering, skip. */
+
+    sub_e7b5();
+}
+
+/*
+ * $81:E72E — BG layer configuration
+ *
+ * Reads config from table at $81:EBBB indexed by $0126,
+ * decompresses BG config data to WRAM via $84:DF48.
+ */
+static void sub_e72e(void) {
+    uint16_t x = compute_idx_0126();
+
+    uint16_t y_val = bus_read16(0x81, 0xEBBB + x);      /* data pointer */
+    uint16_t bank_raw = bus_read16(0x81, 0xEBBD + x);
+    uint8_t bank = bank_raw & 0xFF;
+
+    /* $84:DF38 → DF48: decompress data_bank:y_val → $7E:C000 */
+    sub_df48(0xC000, y_val, bank);
+}
+
+/*
+ * $81:E627 — Mode select graphics loading orchestrator
+ *
+ * Main entry point: loads all BG tile data, tilemaps, palettes,
+ * and configuration for the mode select (state $14) screen.
+ */
+void smk_81E627(void) {
+    printf("smk: E627 mode select graphics loading begin\n");
+
+    sub_e631();   /* BG tilemap/graphics */
+    sub_e63f();   /* Palettes + VRAM fill */
+    sub_e72e();   /* BG config → decompresses CGRAM palette to $7E:C000 */
+
+    /* E72E decompresses CGRAM palette to $7E:C000.
+     * The actual CGRAM load happens in the transition handler via $8C1A's
+     * palette ($C4:$1313 → $7E:$3A80 → CGRAM DMA). */
+
+
+    printf("smk: E627 mode select graphics loading complete\n");
+}
+
+/* ===================================================================
  * Mode select screen (state $06) — bank $85
  * =================================================================== */
 

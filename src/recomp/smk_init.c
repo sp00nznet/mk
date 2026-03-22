@@ -337,39 +337,46 @@ void smk_81E398(void) {
     OP_SET_DB(0x81);
     op_rep(0x30);
 
-    /* JSR $E6B9 — Decompress mode select data from $C4:0000 → $7F:0000 */
+    /* === $E3A0 sub-routine === */
+
+    /* JSR $E68E — Initial decompress + DMA (first pass) */
+    /* Decompress $C4:0000 → $7F:0000, post-process → $7F:7000,
+     * DMA $7F:0070 → VRAM $3000 (4KB, high bytes) */
     g_cpu.Y = 0x0000;
     CPU_SET_A16(0x00C4);
     g_cpu.X = 0x0000;
     smk_84E09E();
 
-    /* DMA $7F:0070 → VRAM $3000 (4KB, high bytes via VMDATAH) */
     op_rep(0x30);
-    bus_write16(0x81, 0x2115, 0x0080);  /* VMAIN=$80 */
-    bus_write16(0x81, 0x2116, 0x3000);  /* VMADD=$3000 */
-    bus_write16(0x81, 0x4300, 0x0000);  /* STZ: ctrl=$00, dest=$00 */
-    bus_write16(0x81, 0x4301, 0x0019);  /* dest=$19 (VMDATAH), src_lo=$00 */
-    bus_write16(0x81, 0x4303, 0x7F70);  /* src=$7F:0070 */
-    bus_write16(0x81, 0x4305, 0x1000);  /* size=$1000 (4KB) */
-    bus_write16(0x81, 0x420B, 0x0001);  /* trigger DMA ch0 */
+    bus_write16(0x81, 0x2115, 0x0080);
+    bus_write16(0x81, 0x2116, 0x3000);
+    bus_write16(0x81, 0x4300, 0x0000);
+    bus_write16(0x81, 0x4301, 0x0019);
+    bus_write16(0x81, 0x4303, 0x7F70);
+    bus_write16(0x81, 0x4305, 0x1000);
+    bus_write16(0x81, 0x420B, 0x0001);
 
     /* JSR $EC5E — Mode config lookup (set $0126 from table) */
     {
         uint16_t idx = bus_wram_read16(0x0124);
         uint8_t val = bus_read8(0x81, 0xEC2F + idx);
         bus_wram_write16(0x0126, val);
+        printf("smk: EC5E config lookup — $0124=%04X → $0126=%02X\n", idx, val);
     }
 
-    /* JSL $088BF5 — PPU register init (shared with $808BEA, entry at $8BF5)
-     * Clears windows, sets TM=$10, clears color math, DMAs font tiles. */
+    /* JSR $E627 — Full graphics loading chain */
+    smk_81E627();
+
+    /* === End of $E3A0 === */
+
+    /* JSL $088BF5 — PPU register init
+     * Clears windows, color math. We keep the register clears but override
+     * TM to $1F (all layers) since E627 loaded all BG data. */
     op_sep(0x30);
 
-    /* Clear window registers */
     bus_write8(0x80, 0x2123, 0x00);  /* W12SEL */
     bus_write8(0x80, 0x2124, 0x00);  /* W34SEL */
     bus_write8(0x80, 0x2125, 0x00);  /* WOBJSEL */
-    bus_write8(0x80, 0x212C, 0x10);  /* TM: OBJ only */
-    bus_write8(0x80, 0x212D, 0x10);  /* TS: OBJ only */
     bus_write8(0x80, 0x212E, 0x00);  /* TMW */
     bus_write8(0x80, 0x212F, 0x00);  /* TSW */
     bus_write8(0x80, 0x2133, 0x00);  /* SETINI */
@@ -386,6 +393,69 @@ void smk_81E398(void) {
     bus_write16(0x80, 0x4304, 0x0084);
     bus_write16(0x80, 0x4305, 0x0400);
     bus_write16(0x80, 0x420B, 0x0001);
+
+    /* OAM DMA */
+    smk_80946E();
+
+    /* Configure PPU Mode 0 with all BG layers enabled.
+     * E627 VRAM layout analysis:
+     *   $0000-$3FFF: tilemap data (low bytes from E7B5, high bytes from E769#1/E68E)
+     *                4 × 32×32 tilemaps at $0000/$0800/$1000/$1800
+     *   $4000-$43FF: font tiles (from $088BF5 DMA above)
+     *   $7000-$7FFF: 2bpp tile character data (E769 DMA #2 + E7DA/E7F6 patches)
+     * DF48 put additional BG config at $7E:C000 but our simplified main handler
+     * doesn't transfer it, so we configure BG registers directly. */
+    /* Decompress the CORRECT CGRAM palette (from $8C1A main handler flow).
+     * The transition's E72E decompresses $C4:$117F → $7E:C000 (512 bytes).
+     * But the main handler decompresses $C4:$1313 → $7E:$3A80 for the
+     * actual display palette. We need to do BOTH. */
+    {
+        extern void sub_df48(uint16_t out_start, uint16_t data_ptr, uint8_t data_bank);
+        sub_df48(0x3A80, 0x1313, 0xC4);
+
+        /* DMA 512 bytes from $7E:3A80 → CGRAM (same as $80:8413) */
+        op_rep(0x30);
+        bus_write16(0x80, 0x4305, 0x0200);  /* size = 512 */
+        bus_write16(0x80, 0x4302, 0x3A80);  /* src lo=$80, hi=$3A */
+        bus_write16(0x80, 0x4300, 0x2202);  /* ctrl=$02 (1-reg), dest=$22 (CGDATA) */
+        op_sep(0x20);
+        bus_write8(0x80, 0x2121, 0x00);     /* CGADD = 0 */
+        bus_write8(0x80, 0x4304, 0x7E);     /* bank = $7E */
+        bus_write8(0x80, 0x420B, 0x01);     /* trigger DMA ch0 */
+        op_rep(0x30);
+        printf("smk: loaded CGRAM from $7E:3A80 (main handler palette)\n");
+    }
+
+    /* Original game uses TM=$10 (OBJ only) for mode select!
+     * The text and cursor are rendered as sprites, not BG layers.
+     * E627 pre-loads graphics for later screens (character select).
+     * Set up 4 cursor sprites from $8C7D table (same as original $8C1A). */
+    op_sep(0x20);
+    bus_write8(0x80, 0x212C, 0x10);  /* TM: OBJ only (original value) */
+    bus_write8(0x80, 0x212D, 0x00);  /* TS: none */
+    bus_write8(0x80, 0x2101, 0x02);  /* OBSEL: 8x8/16x16 sprites */
+    bus_write8(0x80, 0x2115, 0x80);  /* VMAIN */
+
+    /* Set up 4 OAM sprites from $8C7D table (cursor/text indicators).
+     * Original: 4 entries × 4 bytes at $8C7D → OAM mirror $0200.
+     * Sprites at Y=$70, X=$60/$70/$80/$90, tiles 0/2/4/6, attr $30 (pal 6). */
+    op_rep(0x30);
+    {
+        static const uint8_t oam_data[16] = {
+            0x60, 0x70, 0x00, 0x30,  /* sprite 0: X=$60, Y=$70, tile=$00, pal6 */
+            0x70, 0x70, 0x02, 0x30,  /* sprite 1: X=$70, Y=$70, tile=$02, pal6 */
+            0x80, 0x70, 0x04, 0x30,  /* sprite 2: X=$80, Y=$70, tile=$04, pal6 */
+            0x90, 0x70, 0x06, 0x30,  /* sprite 3: X=$90, Y=$70, tile=$06, pal6 */
+        };
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            for (int i = 0; i < 16; i++)
+                wram[0x0200 + i] = oam_data[i];
+            /* OAM high table: $55AA pattern (original sets this) */
+            wram[0x0400] = 0xAA;
+            wram[0x0401] = 0x55;
+        }
+    }
 
     /* OAM DMA + brightness */
     smk_80946E();
@@ -442,6 +512,7 @@ void smk_register_all(void) {
 
     /* State $14 — mode select */
     func_table_register(0x81E398, smk_81E398);  /* transition $14 handler */
+    func_table_register(0x81E627, smk_81E627);  /* mode select graphics chain */
     func_table_register(0x808174, smk_808174);  /* state $14 main handler */
     func_table_register(0x808369, smk_808369);  /* NMI state $14 */
 
@@ -458,5 +529,5 @@ void smk_register_all(void) {
     func_table_register(0x8590B1, smk_8590B1);  /* mode select main logic */
     func_table_register(0x8590D7, smk_8590D7);  /* mode select NMI rendering */
 
-    printf("smk: registered %d recompiled functions\n", 46);
+    printf("smk: registered %d recompiled functions\n", 47);
 }

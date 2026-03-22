@@ -63,5 +63,6 @@ void smk_81E576(void);  /* Sprite tile decompression + 2bpp→4bpp interleave */
 void smk_81CB35(void);  /* NMI sprite tile DMA (stub) */
 void smk_81E126(void);  /* Transition handler: character select init */
 void smk_81E398(void);  /* Transition handler: mode select init */
+void smk_81E627(void);  /* Mode select graphics loading chain */
 
 #endif /* SMK_FUNCTIONS_H */
