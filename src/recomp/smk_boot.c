@@ -303,6 +303,7 @@ void smk_808174(void) {
 
     /* 3. $B93E → $81:94C2 (hardware multiply / animation — stub for now) */
 
+
     /* 4. Set 4 cursor OAM sprites from $8C7D table.
      * Y position based on current mode selection ($2C):
      *   mode 0 (GP):     Y=$60
