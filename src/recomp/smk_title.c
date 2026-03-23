@@ -2348,6 +2348,13 @@ void smk_85909B(void) {
      * - CBE4 VRAM $5000 writes may be for UI elements, not character faces
      * - The full sprite builder at $85:95AD/$81:CB44 needs implementation */
 
+    /* Set portrait draw flags to prevent NMI from overwriting face tiles
+     * with placeholder patterns ($281C/$2410). The face tile data IS in
+     * VRAM $3000 (loaded by $85:915F from $7F:EA00). The NMI handler at
+     * $85:90D7 checks $0184/$0186 and skips the placeholder fill when non-zero. */
+    bus_wram_write16(0x0184, 0x0001);
+    bus_wram_write16(0x0186, 0x0001);
+
     g_cpu.DB = saved_db;
     printf("smk: character select init (state $06) complete\n");
 }
@@ -2685,50 +2692,13 @@ static void smk_85_965B(void) {
 static void smk_85_9561(void) {
     bus_wram_write16(g_cpu.DP + 0x3C, 0x0300);
 
-    uint8_t *wram = bus_get_wram();
-    if (!wram) return;
-
-    /* Character slot positions (X/Y from $85:9239 init table) */
-    static const struct { uint8_t x, y; } slot_pos[8] = {
-        { 0x38, 0x70 }, { 0x38, 0xB1 }, { 0x98, 0x70 }, { 0x68, 0x71 },
-        { 0x98, 0xB1 }, { 0xC8, 0x71 }, { 0xC8, 0xB0 }, { 0x68, 0xB0 },
-    };
-
-    /* Portrait tiles loaded during init (forced blank) — see smk_85909B */
-
-    /* Build portrait sprites for P1 at selected character's position */
-    uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66);
-    int sel_idx = sel / 2;
-    if (sel_idx < 0 || sel_idx >= 8) sel_idx = 0;
-
-    int px = slot_pos[sel_idx].x;
-    int py = slot_pos[sel_idx].y;
-
-    /* Place 3 16×16 sprites horizontally (48×16 portrait) */
-    for (int i = 0; i < 3; i++) {
-        int oam_off = 0x0200 + i * 4;  /* OAM slots 0-2 */
-        wram[oam_off + 0] = (uint8_t)(px + i * 16);  /* X */
-        wram[oam_off + 1] = (uint8_t)(py);            /* Y */
-        wram[oam_off + 2] = (uint8_t)(i * 2);         /* tile ($00/$02/$04) */
-        wram[oam_off + 3] = 0x31;                     /* pal 6, priority 1, nt=1 */
-    }
-
-    /* Set OAM high table: sprites 0-2 = large (16×16), X bit9 = 0 */
-    wram[0x0400] = (wram[0x0400] & 0xC0) | 0x2A;  /* spr 0-2: size=1 */
-
-    /* Move remaining sprites (3-127) offscreen */
-    for (int i = 3; i < 128; i++) {
-        int off = 0x0200 + i * 4;
-        wram[off + 0] = 0xF8;
-        wram[off + 1] = 0xE0;
-        wram[off + 2] = 0x00;
-        wram[off + 3] = 0x00;
-    }
-    /* Clear rest of high table */
-    wram[0x0400] = (wram[0x0400] & 0x3F);  /* clear spr 3 bits */
-    for (int i = 1; i < 32; i++) {
-        wram[0x0400 + i] = 0x55;  /* all X bit9=1 (offscreen), size=0 */
-    }
+    /* Character portraits are BG tiles at VRAM $3000 (loaded by $85:915F
+     * from $7F:EA00). The tilemaps at $2400/$2800/$2C00 reference these tiles.
+     * No OBJ sprites needed for portraits — they're entirely BG-based.
+     *
+     * TODO: implement $85:956E (OAM builder for animated character sprites)
+     * and $81:CB44 (OAM staging for per-frame sprite tile DMA). These handle
+     * the animated kart sprite that appears when a character is selected. */
 }
 
 /*
