@@ -339,7 +339,6 @@ void smk_808174(void) {
     bus_write8(0x80, 0x2100, 0x0F);
     op_rep(0x30);
 
-    /* === Input handling (simplified) === */
     uint16_t fade = bus_wram_read16(g_cpu.DP + 0x48);
     if (fade == 0) {
         uint16_t edge = bus_wram_read16(g_cpu.DP + 0x28);

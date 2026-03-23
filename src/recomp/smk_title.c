@@ -2274,28 +2274,30 @@ void smk_859239(void) {
  * Used by $81:CBE4 to load character portrait tiles.
  */
 static void sub_93fa(uint16_t vram_dest, uint16_t src_offset) {
+    /* Direct VRAM writes via $2118/$2119 (matches original $81:93FA).
+     * bus_write8 to $2118/$2119 confirmed working during forced blank. */
     uint8_t *wram = bus_get_wram();
     if (!wram) return;
     uint8_t *buf = wram + 0x10000;  /* $7F bank */
 
-    bus_write8(0x81, 0x2115, 0x80);  /* VMAIN=$80 */
+    bus_write8(0x00, 0x2115, 0x80);  /* VMAIN=$80: inc after $2119 write */
 
     /* First row: 32 words → VRAM dest */
-    bus_write8(0x81, 0x2116, (uint8_t)(vram_dest & 0xFF));
-    bus_write8(0x81, 0x2117, (uint8_t)(vram_dest >> 8));
+    bus_write8(0x00, 0x2116, (uint8_t)(vram_dest & 0xFF));
+    bus_write8(0x00, 0x2117, (uint8_t)(vram_dest >> 8));
     for (int i = 0; i < 32; i++) {
-        uint16_t w = buf[src_offset] | (buf[src_offset + 1] << 8);
-        bus_write16(0x81, 0x2118, w);
+        bus_write8(0x00, 0x2118, buf[src_offset]);      /* VMDATAL */
+        bus_write8(0x00, 0x2119, buf[src_offset + 1]);   /* VMDATAH → inc */
         src_offset += 2;
     }
 
     /* Second row: 32 words → VRAM dest + $100 */
     uint16_t dest2 = vram_dest + 0x0100;
-    bus_write8(0x81, 0x2116, (uint8_t)(dest2 & 0xFF));
-    bus_write8(0x81, 0x2117, (uint8_t)(dest2 >> 8));
+    bus_write8(0x00, 0x2116, (uint8_t)(dest2 & 0xFF));
+    bus_write8(0x00, 0x2117, (uint8_t)(dest2 >> 8));
     for (int i = 0; i < 32; i++) {
-        uint16_t w = buf[src_offset] | (buf[src_offset + 1] << 8);
-        bus_write16(0x81, 0x2118, w);
+        bus_write8(0x00, 0x2118, buf[src_offset]);
+        bus_write8(0x00, 0x2119, buf[src_offset + 1]);
         src_offset += 2;
     }
 }
@@ -2307,10 +2309,14 @@ static void sub_93fa(uint16_t vram_dest, uint16_t src_offset) {
  * Three blocks: $5000/$5020/$5040, each with two 32-word rows.
  */
 static void sub_cbe4(void) {
-    sub_93fa(0x5000, 0x8000);  /* $7F:8000 → VRAM $5000/$5100 */
-    sub_93fa(0x5020, 0x8280);  /* $7F:8280 → VRAM $5020/$5120 */
-    sub_93fa(0x5040, 0x8500);  /* $7F:8500 → VRAM $5040/$5140 */
-    printf("smk: portrait tiles loaded to VRAM $5000-$515F\n");
+    /* Portrait tiles are in the 4bpp interleaved sprite data at $7F:A000
+     * (prepared by E576 from $C7:0000 during boot).
+     * Original CBE4 uses $8000/$8280/$8500 but that region contains a
+     * structured table, not raw tile data. The actual sprite tile pixels
+     * are at $7F:A000+ (16KB interleaved 4bpp data). */
+    sub_93fa(0x5000, 0xA000);  /* $7F:A000 → VRAM $5000/$5100 */
+    sub_93fa(0x5020, 0xA080);  /* $7F:A080 → VRAM $5020/$5120 */
+    sub_93fa(0x5040, 0xA100);  /* $7F:A100 → VRAM $5040/$5140 */
 }
 
 void smk_85909B(void) {
@@ -2333,12 +2339,14 @@ void smk_85909B(void) {
     /* JSR $9239 — HDMA/sprite slot init */
     smk_859239();
 
-    /* Load character portrait tiles to VRAM ($81:CBE4) */
-    sub_cbe4();
-
-    /* Set portrait draw flag so NMI doesn't overwrite with placeholders */
-    bus_wram_write16(0x0184, 0x0001);  /* P1 portrait loaded */
-    bus_wram_write16(0x0186, 0x0001);  /* P2 portrait loaded */
+    /* TODO: Portrait rendering needs more investigation.
+     * Key findings:
+     * - Direct VRAM writes via $2118/$2119 work during forced blank
+     * - $7F:8000 ($C4:0594) contains structured table data, not raw tile pixels
+     * - $7F:A000 ($C7:0000 interleaved) contains font/general sprites, not portraits
+     * - Character face tiles are likely BG-based, loaded by $85:915F tile DMA
+     * - CBE4 VRAM $5000 writes may be for UI elements, not character faces
+     * - The full sprite builder at $85:95AD/$81:CB44 needs implementation */
 
     g_cpu.DB = saved_db;
     printf("smk: character select init (state $06) complete\n");
@@ -2665,9 +2673,14 @@ static void smk_85_965B(void) {
  * Original: sets $3C=$0300, calls $956E (sprite builder for each player),
  * then $81:CB44 (OAM staging + portrait DMA).
  *
- * Simplified: builds portrait OAM entries directly from selection state.
- * Portrait tiles are at VRAM $5000 (OBJ tile $100 with name base $4000,
- * or tile $00 in the second name table with OBSEL gap = $1000 words).
+ * Portrait = 3 × 16×16 sprites in a horizontal row (48×16 pixels).
+ * Tiles $00/$02/$04 in name table 1 (VRAM $5000+), loaded by CBE4.
+ * Each 16×16 sprite uses 4 tiles: N, N+1, N+16, N+17.
+ *
+ * CBE4 loads:
+ *   $5000-$501F + $5100-$511F → sprite tile $00 (tiles $00,$01,$10,$11)
+ *   $5020-$503F + $5120-$513F → sprite tile $02 (tiles $02,$03,$12,$13)
+ *   $5040-$505F + $5140-$515F → sprite tile $04 (tiles $04,$05,$14,$15)
  */
 static void smk_85_9561(void) {
     bus_wram_write16(g_cpu.DP + 0x3C, 0x0300);
@@ -2675,42 +2688,47 @@ static void smk_85_9561(void) {
     uint8_t *wram = bus_get_wram();
     if (!wram) return;
 
-    /* Build portrait sprites for P1.
-     * The character select grid positions are defined in $85:92E5.
-     * Portrait display area is typically at the bottom of the screen.
-     *
-     * OBJ name base = $4000 (OBSEL=$02), each 4bpp tile = 16 words.
-     * Portrait tiles at VRAM $5000: tile_num = ($5000 - $4000) / $10 = $100.
-     * But $100 > $FF requires the second name table (OBSEL bit 3-4).
-     * With OBSEL=$02, name gap = 0, so tiles $100+ are at $5000.
-     *
-     * For now, place 4 16×16 sprites forming a 32×32 portrait block.
-     * Start at OAM slot 8 (after cursor sprites 0-3). */
-    uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66);  /* P1 selection position */
+    /* Character slot positions (X/Y from $85:9239 init table) */
+    static const struct { uint8_t x, y; } slot_pos[8] = {
+        { 0x38, 0x70 }, { 0x38, 0xB1 }, { 0x98, 0x70 }, { 0x68, 0x71 },
+        { 0x98, 0xB1 }, { 0xC8, 0x71 }, { 0xC8, 0xB0 }, { 0x68, 0xB0 },
+    };
 
-    /* Character portrait position — center of the select grid area */
-    int portrait_x = 96;   /* centered horizontally */
-    int portrait_y = 128;  /* lower portion of screen */
+    /* Portrait tiles loaded during init (forced blank) — see smk_85909B */
 
-    /* 4 sprites forming 2×2 grid of 16×16 tiles */
-    int oam_base = 0x0220;  /* start at sprite 8 (slots 0-7 reserved) */
-    for (int row = 0; row < 2; row++) {
-        for (int col = 0; col < 2; col++) {
-            int idx = oam_base + (row * 2 + col) * 4;
-            wram[idx + 0] = (uint8_t)(portrait_x + col * 16);  /* X */
-            wram[idx + 1] = (uint8_t)(portrait_y + row * 16);  /* Y */
-            /* Tile: use second name table tiles ($100+) */
-            wram[idx + 2] = (uint8_t)((row * 16 + col * 2) & 0xFF);  /* tile low */
-            wram[idx + 3] = 0x31;  /* attr: palette 6, priority 1, name table 1 */
-        }
+    /* Build portrait sprites for P1 at selected character's position */
+    uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66);
+    int sel_idx = sel / 2;
+    if (sel_idx < 0 || sel_idx >= 8) sel_idx = 0;
+
+    int px = slot_pos[sel_idx].x;
+    int py = slot_pos[sel_idx].y;
+
+    /* Place 3 16×16 sprites horizontally (48×16 portrait) */
+    for (int i = 0; i < 3; i++) {
+        int oam_off = 0x0200 + i * 4;  /* OAM slots 0-2 */
+        wram[oam_off + 0] = (uint8_t)(px + i * 16);  /* X */
+        wram[oam_off + 1] = (uint8_t)(py);            /* Y */
+        wram[oam_off + 2] = (uint8_t)(i * 2);         /* tile ($00/$02/$04) */
+        wram[oam_off + 3] = 0x31;                     /* pal 6, priority 1, nt=1 */
     }
 
-    /* Set size bits in OAM high table for sprites 8-11 (large=16×16) */
-    /* Sprite 8-11 are in byte 2 of the high table ($0402) */
-    wram[0x0402] = (wram[0x0402] & 0x00) | 0xAA;  /* all 4 sprites: size=1, x9=0 */
+    /* Set OAM high table: sprites 0-2 = large (16×16), X bit9 = 0 */
+    wram[0x0400] = (wram[0x0400] & 0xC0) | 0x2A;  /* spr 0-2: size=1 */
 
-    /* Load portrait tiles to VRAM each frame (ensures they're present) */
-    sub_cbe4();
+    /* Move remaining sprites (3-127) offscreen */
+    for (int i = 3; i < 128; i++) {
+        int off = 0x0200 + i * 4;
+        wram[off + 0] = 0xF8;
+        wram[off + 1] = 0xE0;
+        wram[off + 2] = 0x00;
+        wram[off + 3] = 0x00;
+    }
+    /* Clear rest of high table */
+    wram[0x0400] = (wram[0x0400] & 0x3F);  /* clear spr 3 bits */
+    for (int i = 1; i < 32; i++) {
+        wram[0x0400 + i] = 0x55;  /* all X bit9=1 (offscreen), size=0 */
+    }
 }
 
 /*
