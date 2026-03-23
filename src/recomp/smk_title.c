@@ -1316,6 +1316,10 @@ static void smk_build_dma_staging(int slot_idx) {
      * This becomes the DMA size low byte: e.g. $21→$20 = 32 bytes = 1 tile. */
     uint8_t dma_size = hi_byte & 0xF0;
 
+    /* Note: first activation (cached=$0140 sentinel) only transfers cnt=1
+     * row (32 bytes). The original game pre-loads base tiles via CB98/CBE4.
+     * For now, rely on per-frame updates to fill tiles over time. */
+
     /* Get current buffer write index */
     uint8_t *wram = bus_get_wram();
     if (!wram) return;
@@ -1324,6 +1328,17 @@ static void smk_build_dma_staging(int slot_idx) {
     /* Build DMA entries (one per "row", cnt iterations) */
     uint16_t vram_cur = vram_base;
     uint16_t src_cur = src_addr;
+
+    /* Debug: log first staging for each slot */
+    {
+        static uint8_t logged[8] = {0};
+        if (!logged[slot_idx]) {
+            printf("smk: DMA stage slot %d: frame=$%04X tile=$%02X cnt=%d src=$%02X:%04X vram=$%04X size=$%02X\n",
+                   slot_idx, frame_data, tile_idx, cnt, (uint8_t)(config & 0xFF), src_addr, vram_base, dma_size);
+            logged[slot_idx] = 1;
+        }
+    }
+
     for (int j = 0; j < cnt; j++) {
         /* Entry: 3 words (6 bytes) at $0EA0 + buf_pos */
         int base = 0x0EA0 + buf_pos;
@@ -1375,14 +1390,16 @@ static void smk_build_oam_from_slots(void) {
         uint16_t phase = slot_read(s, 0x42);
         if (phase == 0) continue;  /* inactive */
 
-        /* Screen coord = [$18:$19] + $FF00 (from $80:CF0E) */
-        uint16_t pos_x = bus_wram_read8(s + 0x18) | (bus_wram_read8(s + 0x19) << 8);
-        uint16_t pos_y = bus_wram_read8(s + 0x1C) | (bus_wram_read8(s + 0x1D) << 8);
-        uint16_t sx = pos_x + 0xFF00;
-        uint16_t sy = pos_y + 0xFF00;
+        /* Screen position from slot $18/$1C.
+         * Title screen uses screen-relative coordinates directly.
+         * Race mode would subtract camera offset ($80:CF0E uses + $FF00). */
+        uint16_t pos_x = bus_wram_read16(s + 0x18);
+        uint16_t pos_y = bus_wram_read16(s + 0x1C);
+        uint16_t sx = pos_x;
+        uint16_t sy = pos_y;
 
-        uint8_t sx_hi = (uint8_t)(sx >> 8);
-        if (sx_hi != 0x00 && sx_hi != 0xFF) continue;  /* offscreen */
+        /* Skip if clearly offscreen (X > 255 and not wrapping) */
+        if (sx > 0x00FF && sx < 0xFF00) continue;
 
         /* Compute OAM tile from VRAM dest for this slot.
          * VRAM dest is in the second sprite page (objTileAdr2=$5000).
@@ -1403,18 +1420,19 @@ static void smk_build_oam_from_slots(void) {
         uint16_t flags = slot_read(s, 0x86);
         if (flags & 0x8000) attr ^= 0x40;
 
-        /* Write OAM low table */
+        /* Single 16×16 OAM entry per slot. The per-frame DMA updates
+         * one 32-byte tile at the VRAM base. The other 3 sub-tiles of the
+         * 16×16 sprite come from the init load ($7F:A000 → VRAM $4000). */
         uint16_t oam_addr = 0x0200 + oam_idx * 4;
         wram[oam_addr + 0] = (uint8_t)(sx & 0xFF);
         wram[oam_addr + 1] = (uint8_t)(sy & 0xFF);
         wram[oam_addr + 2] = tile;
         wram[oam_addr + 3] = attr;
 
-        /* OAM high table: size=large, X bit 8 */
+        /* OAM high table: size=large (16×16), X bit 8 = 0 */
         uint16_t hi_addr = 0x0400 + (oam_idx / 4);
         uint8_t hi_shift = (oam_idx % 4) * 2;
-        uint8_t hi_bits = 0x02;  /* size = large */
-        if (sx_hi == 0xFF) hi_bits |= 0x01;
+        uint8_t hi_bits = 0x02;  /* size=large */
         wram[hi_addr] = (wram[hi_addr] & ~(0x03 << hi_shift)) | (hi_bits << hi_shift);
 
         oam_idx++;
