@@ -2267,6 +2267,52 @@ void smk_859239(void) {
  *   JSR $9239     ; OAM/sprite init
  *   PLB/RTL
  */
+/*
+ * $81:93FA — Direct VRAM write for portrait/sprite tiles
+ *
+ * Copies 32 words from $7F:X to VRAM A, then 32 words to VRAM A+$100.
+ * Used by $81:CBE4 to load character portrait tiles.
+ */
+static void sub_93fa(uint16_t vram_dest, uint16_t src_offset) {
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+    uint8_t *buf = wram + 0x10000;  /* $7F bank */
+
+    bus_write8(0x81, 0x2115, 0x80);  /* VMAIN=$80 */
+
+    /* First row: 32 words → VRAM dest */
+    bus_write8(0x81, 0x2116, (uint8_t)(vram_dest & 0xFF));
+    bus_write8(0x81, 0x2117, (uint8_t)(vram_dest >> 8));
+    for (int i = 0; i < 32; i++) {
+        uint16_t w = buf[src_offset] | (buf[src_offset + 1] << 8);
+        bus_write16(0x81, 0x2118, w);
+        src_offset += 2;
+    }
+
+    /* Second row: 32 words → VRAM dest + $100 */
+    uint16_t dest2 = vram_dest + 0x0100;
+    bus_write8(0x81, 0x2116, (uint8_t)(dest2 & 0xFF));
+    bus_write8(0x81, 0x2117, (uint8_t)(dest2 >> 8));
+    for (int i = 0; i < 32; i++) {
+        uint16_t w = buf[src_offset] | (buf[src_offset + 1] << 8);
+        bus_write16(0x81, 0x2118, w);
+        src_offset += 2;
+    }
+}
+
+/*
+ * $81:CBE4 — Load character portrait tiles to VRAM
+ *
+ * Writes portrait tile data from WRAM $7F:8000+ to VRAM $5000+.
+ * Three blocks: $5000/$5020/$5040, each with two 32-word rows.
+ */
+static void sub_cbe4(void) {
+    sub_93fa(0x5000, 0x8000);  /* $7F:8000 → VRAM $5000/$5100 */
+    sub_93fa(0x5020, 0x8280);  /* $7F:8280 → VRAM $5020/$5120 */
+    sub_93fa(0x5040, 0x8500);  /* $7F:8500 → VRAM $5040/$5140 */
+    printf("smk: portrait tiles loaded to VRAM $5000-$515F\n");
+}
+
 void smk_85909B(void) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
@@ -2287,8 +2333,15 @@ void smk_85909B(void) {
     /* JSR $9239 — HDMA/sprite slot init */
     smk_859239();
 
+    /* Load character portrait tiles to VRAM ($81:CBE4) */
+    sub_cbe4();
+
+    /* Set portrait draw flag so NMI doesn't overwrite with placeholders */
+    bus_wram_write16(0x0184, 0x0001);  /* P1 portrait loaded */
+    bus_wram_write16(0x0186, 0x0001);  /* P2 portrait loaded */
+
     g_cpu.DB = saved_db;
-    printf("smk: mode select init (state $06) complete\n");
+    printf("smk: character select init (state $06) complete\n");
 }
 
 /*
@@ -2607,13 +2660,57 @@ static void smk_85_965B(void) {
 }
 
 /*
- * $85:9561 — OAM rendering
- * Sets OAM base pointer and calls sprite builder.
+ * $85:9561 — OAM rendering for character select
+ *
+ * Original: sets $3C=$0300, calls $956E (sprite builder for each player),
+ * then $81:CB44 (OAM staging + portrait DMA).
+ *
+ * Simplified: builds portrait OAM entries directly from selection state.
+ * Portrait tiles are at VRAM $5000 (OBJ tile $100 with name base $4000,
+ * or tile $00 in the second name table with OBSEL gap = $1000 words).
  */
 static void smk_85_9561(void) {
     bus_wram_write16(g_cpu.DP + 0x3C, 0x0300);
-    /* JSR $956E — sprite rendering sub (stub) */
-    /* JSL $81CB44 — OAM builder (stub) */
+
+    uint8_t *wram = bus_get_wram();
+    if (!wram) return;
+
+    /* Build portrait sprites for P1.
+     * The character select grid positions are defined in $85:92E5.
+     * Portrait display area is typically at the bottom of the screen.
+     *
+     * OBJ name base = $4000 (OBSEL=$02), each 4bpp tile = 16 words.
+     * Portrait tiles at VRAM $5000: tile_num = ($5000 - $4000) / $10 = $100.
+     * But $100 > $FF requires the second name table (OBSEL bit 3-4).
+     * With OBSEL=$02, name gap = 0, so tiles $100+ are at $5000.
+     *
+     * For now, place 4 16×16 sprites forming a 32×32 portrait block.
+     * Start at OAM slot 8 (after cursor sprites 0-3). */
+    uint16_t sel = bus_wram_read16(g_cpu.DP + 0x66);  /* P1 selection position */
+
+    /* Character portrait position — center of the select grid area */
+    int portrait_x = 96;   /* centered horizontally */
+    int portrait_y = 128;  /* lower portion of screen */
+
+    /* 4 sprites forming 2×2 grid of 16×16 tiles */
+    int oam_base = 0x0220;  /* start at sprite 8 (slots 0-7 reserved) */
+    for (int row = 0; row < 2; row++) {
+        for (int col = 0; col < 2; col++) {
+            int idx = oam_base + (row * 2 + col) * 4;
+            wram[idx + 0] = (uint8_t)(portrait_x + col * 16);  /* X */
+            wram[idx + 1] = (uint8_t)(portrait_y + row * 16);  /* Y */
+            /* Tile: use second name table tiles ($100+) */
+            wram[idx + 2] = (uint8_t)((row * 16 + col * 2) & 0xFF);  /* tile low */
+            wram[idx + 3] = 0x31;  /* attr: palette 6, priority 1, name table 1 */
+        }
+    }
+
+    /* Set size bits in OAM high table for sprites 8-11 (large=16×16) */
+    /* Sprite 8-11 are in byte 2 of the high table ($0402) */
+    wram[0x0402] = (wram[0x0402] & 0x00) | 0xAA;  /* all 4 sprites: size=1, x9=0 */
+
+    /* Load portrait tiles to VRAM each frame (ensures they're present) */
+    sub_cbe4();
 }
 
 /*
