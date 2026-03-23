@@ -1449,6 +1449,7 @@ void smk_858045(void) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
+
     /* JSL $81BB70 — RNG (skip for now) */
     /* JSR $92F9 — input handling (copies joypad when brightness ready) */
 
@@ -1458,8 +1459,6 @@ void smk_858045(void) {
         g_cpu.DB = saved_db;
         return;
     }
-
-    /* SEP #$30 / JSR $84D8 — per-frame input check (skip for now) */
 
     /* Mode dispatch: LDA $80 / AND #$07 / ASL / TAX / JMP ($839B,x) */
     uint8_t mode = bus_wram_read8(g_cpu.DP + 0x80) & 0x07;

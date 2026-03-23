@@ -29,3 +29,8 @@ target_link_libraries(smk_launcher PRIVATE
     snesrecomp
     SDL2::SDL2main
 )
+
+# --- oam_dumper (debug tool: runs original ROM in LakeSnes, dumps OAM) ---
+add_executable(oam_dumper tools/oam_dumper.c)
+target_include_directories(oam_dumper PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(oam_dumper PRIVATE lakesnes_hw)
