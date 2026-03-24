@@ -426,10 +426,10 @@ void smk_81E398(void) {
         printf("smk: loaded CGRAM from $7E:3A80 (main handler palette)\n");
     }
 
-    /* Original game uses TM=$10 (OBJ only) for mode select!
-     * The text and cursor are rendered as sprites, not BG layers.
-     * E627 pre-loads graphics for later screens (character select).
-     * Set up 4 cursor sprites from $8C7D table (same as original $8C1A). */
+    /* Original $088BF5 sets TM=$10 (OBJ only).
+     * E627 pre-loads BG data for the character select screen.
+     * Character select PPU config ($84:F45A): Mode 0, tilemaps at
+     * $2400/$2800/$2C00/$3800, tiles at $3000, TM=$1F, OBSEL=$02. */
     op_sep(0x20);
     bus_write8(0x80, 0x212C, 0x10);  /* TM: OBJ only (original value) */
     bus_write8(0x80, 0x212D, 0x00);  /* TS: none */

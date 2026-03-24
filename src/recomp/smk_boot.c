@@ -202,7 +202,8 @@ void smk_8080BA(void) {
     /* INC $38 — game frame counter */
     op_inc_dp16(0x38);
 
-    /* LDA #$0040 / STA $015E — fade step */
+    /* Original: LDA $0162 / STA $015E — stores $0162 (brightness flag) to fade step.
+     * smk_80853D overwrites $015E with $0060 every frame, so this is harmless. */
     op_lda_imm16(0x0040);
     op_sta_abs16(0x015E);
 
@@ -378,6 +379,13 @@ void smk_808369(void) {
 
     /* JSR $946E — OAM DMA */
     smk_80946E();
+
+    /* JSL $088C54 — mid-entry into $8C1A
+     * Original $8C54 enters mid-instruction (ORA ($84,S),Y side effect).
+     * Does: JSR $8413 (CGRAM DMA), JSR $B93E ($81:94C2 animation),
+     * cursor sprites, OAM high table, OAM DMA, brightness=$0F.
+     * Since the main handler ($8174) already does all of this, and the
+     * NMI handler did OAM DMA above, we just need the animation call. */
 
     /* JSR $81B8 = JSR $843C (joypad) + JSR $9EB2 (misc, stub) */
     smk_80843C();
