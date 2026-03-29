@@ -6,7 +6,7 @@ This is the first SNES (65816 CPU) project in the sp00nznet portfolio.
 
 ## Architecture
 - **Source CPU**: WDC 65C816 (16-bit, 3.58 MHz) + DSP-1 coprocessor + SPC700 audio
-- **ROM Layout**: HiROM FastROM, 512 KB, 8 banks (C0-C7)
+- **ROM Layout**: HiROM FastROM, 512 KB, DSP-1 coprocessor mapped at $00-1F:$6000-$7FFF
 - **Target**: Native x86-64 C code with SDL2 for windowing/rendering/audio
 - **Hardware Backend**: [snesrecomp](https://github.com/sp00nznet/snesrecomp) library (LakeSnes-powered)
 

@@ -64,5 +64,6 @@ void smk_81CB35(void);  /* NMI sprite tile DMA (stub) */
 void smk_81E126(void);  /* Transition handler: character select init */
 void smk_81E398(void);  /* Transition handler: mode select init */
 void smk_81E627(void);  /* Mode select graphics loading chain */
+void smk_81E4B3(void);  /* Mode 7 angle lookup table builder */
 
 #endif /* SMK_FUNCTIONS_H */

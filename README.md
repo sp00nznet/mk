@@ -6,12 +6,12 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 ## Status
 
-**46 recompiled functions** — game boots through the title screen with full rendering, accepts joypad input, and transitions through the mode select and character select screens.
+**48 recompiled functions** — game boots through the title screen with full rendering, accepts joypad input, and transitions through the mode select and character select screens. DSP-1 coprocessor fully emulated via LakeSnes HLE backend.
 
 ![Title Screen](titlescreen.gif)
 
 ### What works
-- Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup
+- Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup → Mode 7 angle table
 - NMI handler with state dispatch, brightness fading, OAM DMA
 - Main loop with state machine (idle → init → title → mode select → character select)
 - Custom tile/tilemap decompressor ($84:E09E) — all 7 compression modes + E0+ extended counts
@@ -32,7 +32,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 ### What's next
 - Mode select screen graphics (text overlays for GP/Match Race/Battle Mode)
 - Character portraits on the character select grid
-- Race screen (Mode 7, DSP-1 math, full gameplay)
+- Race screen (Mode 7 rendering, DSP-1 projection math, full gameplay — DSP-1 HLE backend now active)
 
 ## Architecture
 
@@ -40,7 +40,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 ┌─────────────────────────────────────────────────┐
 │                 smk_launcher                      │
 │  ┌──────────────────────────────────────────┐    │
-│  │  src/recomp/ — 46 Recompiled functions   │    │
+│  │  src/recomp/ — 48 Recompiled functions   │    │
 │  │  smk_boot.c  — NMI, state machine, input │    │
 │  │  smk_init.c  — Init, transition dispatch │    │
 │  │  smk_title.c — Decompressor, PPU, menus  │    │

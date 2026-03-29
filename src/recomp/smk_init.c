@@ -85,8 +85,8 @@ void smk_81E000(void) {
     /* JSL $81E576 — Sprite tile decompression + 2bpp→4bpp interleave */
     smk_81E576();
 
-    /* JSL $81E4B3 — Mode 7 tile setup */
-    /* Skip for now — Mode 7 not yet needed */
+    /* JSL $81E4B3 — Mode 7 angle lookup table */
+    smk_81E4B3();
 
     /* JSL $00FF93 — trivial (PHB/PHK/PLB/PLB/RTL) */
     /* Does nothing useful */
@@ -467,6 +467,123 @@ void smk_81E398(void) {
     printf("smk: mode select transition (state $14) complete\n");
 }
 
+/*
+ * $81:F722 — atan2 computation (local subroutine)
+ *
+ * Takes X and Y as 16-bit signed deltas.
+ * Returns 8-bit angle (0=$00=0°, $40=90°, $80=180°, $C0=270°).
+ * Uses hardware divider to compute ratio, then looks up from
+ * decompressed atan base table at $7F:0000.
+ *
+ * Quadrant tables at $81:F7C3 (negate flags) and $81:F7CB (offsets).
+ */
+static uint8_t atan2_f722(int16_t x_in, int16_t y_in) {
+    static const uint8_t negate_flags[8] = {0xFF, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00};
+    static const uint8_t quadrant_offsets[8] = {0x40, 0x40, 0xC0, 0xC0, 0x00, 0x80, 0x00, 0x80};
+
+    uint8_t *wram = bus_get_wram();
+    uint8_t *atan_base = &wram[0x10000]; /* $7F:0000 */
+
+    /* Special case: Y == 0 */
+    if (y_in == 0) {
+        if (x_in == 0) return 0x00;
+        return (x_in < 0) ? 0xC0 : 0x40;
+    }
+
+    uint8_t quadrant = 0;
+    uint16_t ay = (uint16_t)y_in;
+    if (y_in < 0) {
+        ay = (uint16_t)(-(int16_t)ay);
+        quadrant++;     /* +1 for Y negative */
+    }
+
+    /* Special case: X == 0 */
+    if (x_in == 0) {
+        return (quadrant & 1) ? 0x80 : 0x00;
+    }
+
+    uint16_t ax = (uint16_t)x_in;
+    if (x_in < 0) {
+        ax = (uint16_t)(-(int16_t)ax);
+        quadrant += 2;  /* +2 for X negative */
+    }
+
+    uint16_t larger, smaller;
+    if (ax >= ay) {
+        larger = ax;
+        smaller = ay;
+    } else {
+        larger = ay;
+        smaller = ax;
+        quadrant |= 4; /* swapped flag */
+    }
+
+    /* Scale down until larger fits in 8 bits */
+    while (larger >= 0x100) {
+        larger >>= 1;
+        smaller >>= 1;
+    }
+
+    /* Hardware divide: (smaller * 256) / larger → ratio 0-255 */
+    uint16_t ratio;
+    if (larger == 0) {
+        ratio = 0;
+    } else {
+        ratio = (smaller * 256) / larger;
+    }
+    if (ratio > 255) ratio = 255;
+
+    /* Look up base angle from decompressed atan table */
+    uint8_t base_angle = atan_base[ratio];
+
+    /* Apply quadrant adjustment */
+    if (negate_flags[quadrant]) {
+        base_angle = (uint8_t)(-base_angle);
+    }
+    return (uint8_t)(base_angle + quadrant_offsets[quadrant]);
+}
+
+/*
+ * $81:E4B3 — Mode 7 angle lookup table builder
+ *
+ * 1. Decompresses atan base LUT (256 bytes) from $C6:1F46 → $7F:0000
+ * 2. Builds 64×64 angle table (4096 bytes) at $7F:9000
+ *    For each (row, col) pair:
+ *      col >= row: angle = atan2(row, col)
+ *      col <  row: angle = 0x40 - atan2(col, row) (mirror symmetry)
+ */
+void smk_81E4B3(void) {
+    op_rep(0x30);
+
+    /* Step 1: Decompress atan base LUT from $C6:1F46 → $7F:0000 */
+    g_cpu.Y = 0x1F46;
+    CPU_SET_A16(0x00C6);
+    g_cpu.X = 0x0000;
+    smk_84E09E();
+
+    op_rep(0x30);
+
+    /* Step 2: Build 64×64 angle table at $7F:9000 */
+    uint8_t *wram = bus_get_wram();
+    int idx = 0;
+    for (int row = 0; row < 64; row++) {
+        for (int col = 0; col < 64; col++) {
+            uint8_t angle;
+            if (col >= row) {
+                angle = atan2_f722((int16_t)row, (int16_t)col);
+            } else {
+                /* Mirror: angle = 0x40 - atan2(col, row) */
+                uint8_t a = atan2_f722((int16_t)col, (int16_t)row);
+                angle = (uint8_t)(0x40 - a);
+            }
+            wram[0x19000 + idx] = angle;
+            idx++;
+        }
+    }
+
+    printf("smk: Mode 7 angle table built at $7F:9000 (%d entries)\n", idx);
+}
+
 /* Register all recompiled functions */
 void smk_register_all(void) {
     func_table_register(0x80FF70, smk_80FF70);
@@ -513,6 +630,7 @@ void smk_register_all(void) {
     /* State $14 — mode select */
     func_table_register(0x81E398, smk_81E398);  /* transition $14 handler */
     func_table_register(0x81E627, smk_81E627);  /* mode select graphics chain */
+    func_table_register(0x81E4B3, smk_81E4B3);  /* Mode 7 angle table */
     func_table_register(0x808174, smk_808174);  /* state $14 main handler */
     func_table_register(0x808369, smk_808369);  /* NMI state $14 */
 
@@ -529,5 +647,5 @@ void smk_register_all(void) {
     func_table_register(0x8590B1, smk_8590B1);  /* mode select main logic */
     func_table_register(0x8590D7, smk_8590D7);  /* mode select NMI rendering */
 
-    printf("smk: registered %d recompiled functions\n", 47);
+    printf("smk: registered %d recompiled functions\n", 48);
 }
