@@ -302,8 +302,37 @@ RECOMP_PATCH(smk_808174, 0x808174) {
         op_rep(0x30);
     }
 
-    /* 3. $B93E → $81:94C2 (hardware multiply / animation — stub for now) */
-
+    /* 3. JSR $B93E → $81:94C2 — fill OAM staging with offscreen sprites.
+     *
+     * The original walks 4 DMA parameter blocks at $81:94D8/$94DF/$94E6/$94ED
+     * and DMAs $80E0 patterns into the OAM staging buffer at $0200-$03FF.
+     * The net effect: every sprite slot gets Y=$E0 (off the bottom of the
+     * 224-line visible region), making slots 4-127 invisible. The cursor
+     * sprites (slots 0-3) are written *after* this, overwriting the first
+     * 16 bytes — the offscreen pattern only "wins" for slots 4+.
+     *
+     * Without this filler, slots 4-127 retain whatever was last written
+     * by the previous screen (title screen kart sprites, "PUSH START",
+     * etc.), which remains visible during mode select. */
+    {
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            /* Slots 4-127: 4 bytes each at $0200 + slot*4. Y=$E0 hides them. */
+            for (int slot = 4; slot < 128; slot++) {
+                int o = 0x0200 + slot * 4;
+                wram[o + 0] = 0x00;  /* X low */
+                wram[o + 1] = 0xE0;  /* Y (offscreen below screen) */
+                wram[o + 2] = 0x00;  /* tile */
+                wram[o + 3] = 0x00;  /* attr */
+            }
+            /* OAM high table $0400-$041F: 32 bytes, 4 sprites per byte
+             * (X9 + size, 2 bits each). Slots 0-3 are configured below;
+             * clear the rest so slots 4-127 are small (8x8) and onscreen X. */
+            for (int i = 0x0402; i < 0x0420; i++) {
+                wram[i] = 0x00;
+            }
+        }
+    }
 
     /* 4. Set 4 cursor OAM sprites from $8C7D table.
      * Y position based on current mode selection ($2C):
@@ -380,12 +409,48 @@ RECOMP_PATCH(smk_808369, 0x808369) {
     /* JSR $946E — OAM DMA */
     smk_80946E();
 
-    /* JSL $088C54 — mid-entry into $8C1A
-     * Original $8C54 enters mid-instruction (ORA ($84,S),Y side effect).
-     * Does: JSR $8413 (CGRAM DMA), JSR $B93E ($81:94C2 animation),
-     * cursor sprites, OAM high table, OAM DMA, brightness=$0F.
-     * Since the main handler ($8174) already does all of this, and the
-     * NMI handler did OAM DMA above, we just need the animation call. */
+    /* JSL $088C54 — mid-entry into $8C1A. Does:
+     *   JSR $8413   (CGRAM DMA — main handler already loaded the palette)
+     *   JSR $B93E   (→ $81:94C2 OAM offscreen filler)
+     *   cursor sprite write loop ($8C7D → $0200, 16 bytes)
+     *   OAM high $0400 = $55AA
+     *   JSR $946E   (OAM DMA — already done above)
+     *   brightness $2100 = $0F
+     *
+     * The main handler ($8174) already does all of this. We re-run the
+     * offscreen filler + cursor write each NMI to keep slots 4-127 hidden
+     * and the cursors at the current Y position (which the main handler
+     * updates from the selection in DP $2C). */
+    {
+        uint16_t mode = bus_wram_read16(g_cpu.DP + 0x2C);
+        uint8_t cursor_y = 0x70;
+        if (mode == 0) cursor_y = 0x60;
+        else if (mode == 4) cursor_y = 0x80;
+
+        uint8_t *wram = bus_get_wram();
+        if (wram) {
+            /* OAM offscreen filler for slots 4-127 (matches $81:94C2). */
+            for (int slot = 4; slot < 128; slot++) {
+                int o = 0x0200 + slot * 4;
+                wram[o + 0] = 0x00;
+                wram[o + 1] = 0xE0;
+                wram[o + 2] = 0x00;
+                wram[o + 3] = 0x00;
+            }
+            /* Cursor sprites (slots 0-3). */
+            uint8_t oam[16] = {
+                0x60, cursor_y, 0x00, 0x30,
+                0x70, cursor_y, 0x02, 0x30,
+                0x80, cursor_y, 0x04, 0x30,
+                0x90, cursor_y, 0x06, 0x30,
+            };
+            for (int i = 0; i < 16; i++) wram[0x0200 + i] = oam[i];
+            /* OAM high table: $55AA pattern for cursor sprites; rest cleared. */
+            wram[0x0400] = 0xAA;
+            wram[0x0401] = 0x55;
+            for (int i = 0x0402; i < 0x0420; i++) wram[i] = 0x00;
+        }
+    }
 
     /* JSR $81B8 = JSR $843C (joypad) + JSR $9EB2 (misc, stub) */
     smk_80843C();
