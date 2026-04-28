@@ -8,6 +8,8 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 **48 recompiled functions** — game boots through the title screen with full rendering, accepts joypad input, and transitions through the mode select and character select screens. DSP-1 coprocessor fully emulated via LakeSnes HLE backend.
 
+All recompiled functions are defined with `RECOMP_PATCH(name, snes_addr) { ... }` and auto-register in snesrecomp's dispatch table at static-init time — adding a new translated function is a one-line change at the definition site, no central list to maintain.
+
 ![Title Screen](titlescreen.gif)
 
 ### What works
@@ -123,11 +125,15 @@ Commands `$E0`–`$FE` use extended 10-bit counts: 1 data byte + cmd bits 0-1 as
 ## Project Structure
 
 ```
-├── include/smk/       cpu_ops.h (65816 instruction helpers), functions.h
+├── include/smk/       functions.h (smk_XXXXXX forward declarations)
 ├── src/
 │   ├── recomp/        Recompiled game functions (smk_boot.c, smk_init.c, smk_title.c)
 │   └── main/          main.c — entry point, frame loop
-├── ext/snesrecomp/    snesrecomp library (LakeSnes backend + SDL2 platform)
+├── ext/snesrecomp/    snesrecomp library:
+│                        recomp_patch.h — RECOMP_PATCH auto-registration macro
+│                        cpu_ops.h      — 65816 instruction helpers (op_lda_*, op_sta_*, …)
+│                        cpu.h, bus.h   — CPU state + memory bus
+│                        LakeSnes backend + SDL2 platform
 └── tools/
     ├── disasm/        65816 disassembler (M/X flag tracking, all addressing modes)
     └── mesen/         Mesen2 trace scripts + parsers

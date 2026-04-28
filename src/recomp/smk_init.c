@@ -6,7 +6,7 @@
  */
 
 #include "smk/functions.h"
-#include "smk/cpu_ops.h"
+
 #include <snesrecomp/snesrecomp.h>
 #include <string.h>
 #include <stdio.h>
@@ -39,7 +39,7 @@
  *   LDA #$0060 / STA $015E ; ?
  *   PLB / RTL
  */
-void smk_81E000(void) {
+RECOMP_PATCH(smk_81E000, 0x81E000) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
     op_rep(0x30);   /* 16-bit A and X/Y */
@@ -140,7 +140,7 @@ void smk_81E000(void) {
  * Sets up PPU registers (OBJ base, mosaic, windows, main/sub screen,
  * color math, SETINI) then DMAs tile data from ROM to VRAM.
  */
-void smk_808BEA(void) {
+RECOMP_PATCH(smk_808BEA, 0x808BEA) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x80);
 
@@ -227,7 +227,7 @@ void smk_808BEA(void) {
  * For the initial boot, $32 = $0004, which triggers the title screen
  * initialization sequence.
  */
-void smk_81E067(void) {
+RECOMP_PATCH(smk_81E067, 0x81E067) {
     uint8_t saved_db = g_cpu.DB;
 
     /* LDA $32 / BEQ -> RTL (no transition pending) */
@@ -307,7 +307,7 @@ void smk_81E067(void) {
  *   JSL $85909B  ; character select init
  *   RTS
  */
-void smk_81E126(void) {
+RECOMP_PATCH(smk_81E126, 0x81E126) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
     op_rep(0x30);
@@ -332,7 +332,7 @@ void smk_81E126(void) {
  *   JSR $EC5E → mode config lookup
  *   JSR $E627 → more graphics loading
  */
-void smk_81E398(void) {
+RECOMP_PATCH(smk_81E398, 0x81E398) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
     op_rep(0x30);
@@ -552,7 +552,7 @@ static uint8_t atan2_f722(int16_t x_in, int16_t y_in) {
  *      col >= row: angle = atan2(row, col)
  *      col <  row: angle = 0x40 - atan2(col, row) (mirror symmetry)
  */
-void smk_81E4B3(void) {
+RECOMP_PATCH(smk_81E4B3, 0x81E4B3) {
     op_rep(0x30);
 
     /* Step 1: Decompress atan base LUT from $C6:1F46 → $7F:0000 */
@@ -584,68 +584,6 @@ void smk_81E4B3(void) {
     printf("smk: Mode 7 angle table built at $7F:9000 (%d entries)\n", idx);
 }
 
-/* Register all recompiled functions */
-void smk_register_all(void) {
-    func_table_register(0x80FF70, smk_80FF70);
-    func_table_register(0x80803A, smk_80803A);
-    func_table_register(0x808056, smk_808056);
-    func_table_register(0x808000, smk_808000);
-    func_table_register(0x808BEA, smk_808BEA);
-    func_table_register(0x81E000, smk_81E000);
-    func_table_register(0x81E067, smk_81E067);
-
-    /* NMI sub-calls */
-    func_table_register(0x80B181, smk_80B181);  /* brightness/fade */
-    func_table_register(0x80946E, smk_80946E);  /* OAM DMA */
-    func_table_register(0x85809B, smk_85809B);  /* BG scroll + HDMA */
-    func_table_register(0x8081B5, smk_8081B5);  /* audio/input/misc */
-
-    /* State handlers */
-    func_table_register(0x808067, smk_808067);
-    func_table_register(0x8080BA, smk_8080BA);  /* state $04 (title screen) */
-    func_table_register(0x808096, smk_808096);  /* null state (RTS) */
-    func_table_register(0x8081DD, smk_8081DD);  /* NMI state $00/$1A */
-    func_table_register(0x808237, smk_808237);  /* NMI state $04 */
-
-    /* Transition handlers */
-    func_table_register(0x81E0AD, smk_81E0AD);  /* title screen init */
-    func_table_register(0x81E50D, smk_81E50D);  /* PPU setup for title */
-    func_table_register(0x81E10A, smk_81E10A);  /* title tiles */
-    func_table_register(0x81E118, smk_81E118);  /* title tilemap */
-    func_table_register(0x81E584, smk_81E584);  /* title palette data */
-    func_table_register(0x81E933, smk_81E933);  /* title VRAM DMA */
-    func_table_register(0x81E576, smk_81E576);  /* sprite tile interleave */
-    func_table_register(0x84E09E, smk_84E09E);  /* VRAM data loader */
-    func_table_register(0x84F38C, smk_84F38C);  /* PPU reset */
-    func_table_register(0x84FCF1, smk_84FCF1);  /* SRAM checksum */
-    func_table_register(0x84FD25, smk_84FD25);  /* PUSH START text */
-    func_table_register(0x858000, smk_858000);  /* title gfx setup */
-    func_table_register(0x858045, smk_858045);  /* per-frame sprite update */
-    func_table_register(0x81CB35, smk_81CB35);  /* NMI sprite tile DMA (stub) */
-
-    /* Joypad + title input */
-    func_table_register(0x80843C, smk_80843C);  /* joypad reading */
-    func_table_register(0x80853D, smk_80853D);  /* title screen input */
-
-    /* State $14 — mode select */
-    func_table_register(0x81E398, smk_81E398);  /* transition $14 handler */
-    func_table_register(0x81E627, smk_81E627);  /* mode select graphics chain */
-    func_table_register(0x81E4B3, smk_81E4B3);  /* Mode 7 angle table */
-    func_table_register(0x808174, smk_808174);  /* state $14 main handler */
-    func_table_register(0x808369, smk_808369);  /* NMI state $14 */
-
-    /* State $06 — character select */
-    func_table_register(0x81E126, smk_81E126);  /* transition $06 handler */
-    func_table_register(0x8080CA, smk_8080CA);  /* state $06 main handler */
-    func_table_register(0x80824D, smk_80824D);  /* NMI state $06 */
-    func_table_register(0x84F421, smk_84F421);  /* viewport/HDMA setup */
-    func_table_register(0x84F45A, smk_84F45A);  /* PPU Mode 0 setup */
-    func_table_register(0x8591DE, smk_8591DE);  /* mode select display setup */
-    func_table_register(0x85915F, smk_85915F);  /* tile DMA + palette */
-    func_table_register(0x859239, smk_859239);  /* sprite slot init */
-    func_table_register(0x85909B, smk_85909B);  /* mode select init */
-    func_table_register(0x8590B1, smk_8590B1);  /* mode select main logic */
-    func_table_register(0x8590D7, smk_8590D7);  /* mode select NMI rendering */
-
-    printf("smk: registered %d recompiled functions\n", 48);
-}
+/* All recompiled functions are now auto-registered via RECOMP_PATCH macros
+ * in their definitions — see ext/snesrecomp/include/snesrecomp/recomp_patch.h.
+ * No central registration list is needed. */

@@ -42,5 +42,6 @@ which wraps LakeSnes — a real, cycle-accurate SNES emulator written in pure C.
 - 65816 register state in `SnesCpu g_cpu` (from snesrecomp)
 - Memory access via `bus_read8()` / `bus_write8()` (routes to real LakeSnes hardware)
 - Function naming: smk_XXXXXX (where XXXXXX = SNES address in hex)
-- Function dispatch via `func_table_register()` / `func_table_call()`
+- Functions defined with `RECOMP_PATCH(name, snes_addr) { ... }` — auto-registered in the dispatch table before main() via static constructors. Call directly by C name, or via `func_table_call(addr)` for indirect (JSR/JSL) dispatch
+- 65816 op helpers: `<snesrecomp/cpu_ops.h>` (op_lda_imm8, op_sta_abs16, op_rep, op_php, etc.)
 - Python tools use snake_case, type hints where practical

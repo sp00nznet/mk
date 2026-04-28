@@ -4,8 +4,8 @@
 #ifndef SMK_FUNCTIONS_H
 #define SMK_FUNCTIONS_H
 
-/* Register all recompiled functions in the function table */
-void smk_register_all(void);
+/* Functions are auto-registered via RECOMP_PATCH at static-init time
+ * (see <snesrecomp/recomp_patch.h>) — no central registration call needed. */
 
 /* === Bank $80 === */
 void smk_80FF70(void);  /* Reset vector */

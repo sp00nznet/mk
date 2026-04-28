@@ -7,7 +7,7 @@
 
 #include <snesrecomp/snesrecomp.h>
 #include "smk/functions.h"
-#include "smk/cpu_ops.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -37,8 +37,8 @@ int main(int argc, char *argv[]) {
     }
     printf("\n");
 
-    /* Register all recompiled functions */
-    smk_register_all();
+    /* Recompiled functions are auto-registered via RECOMP_PATCH static
+     * constructors — see ext/snesrecomp/include/snesrecomp/recomp_patch.h. */
 
     /* === Run the boot chain === */
     printf("--- Running boot chain ---\n");

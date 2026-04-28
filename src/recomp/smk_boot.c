@@ -6,7 +6,7 @@
  */
 
 #include "smk/functions.h"
-#include "smk/cpu_ops.h"
+
 #include <snesrecomp/snesrecomp.h>
 #include <stdio.h>
 
@@ -26,7 +26,7 @@
  *   STA $420D      ; FastROM enable
  *   JML $80803A
  */
-void smk_80FF70(void) {
+RECOMP_PATCH(smk_80FF70, 0x80FF70) {
     OP_SEI();
     op_rep(0x09);       /* clear carry + decimal */
     op_xce();           /* native mode */
@@ -52,7 +52,7 @@ void smk_80FF70(void) {
  * then calls the full init subroutine at $81:E000.
  * After init, enters the main loop.
  */
-void smk_80803A(void) {
+RECOMP_PATCH(smk_80803A, 0x80803A) {
     /* PHK / PLB — DB = $80 */
     OP_SET_DB(0x80);
 
@@ -95,7 +95,7 @@ void smk_80803A(void) {
  *   LDX $36         ; game state index
  *   JSR ($8197,x)   ; call state handler
  */
-void smk_808056(void) {
+RECOMP_PATCH(smk_808056, 0x808056) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x80);
 
@@ -132,7 +132,7 @@ void smk_808056(void) {
  * counter, runs brightness/sync handler, dispatches NMI state
  * handler, restores registers.
  */
-void smk_808000(void) {
+RECOMP_PATCH(smk_808000, 0x808000) {
     /* PHP / REP #$38 / PHB / PHK / PLB / PHA / PHX / PHY */
     op_php();
     op_rep(0x38);       /* 16-bit A/X/Y, clear decimal+carry */
@@ -175,7 +175,7 @@ void smk_808000(void) {
  * This is one of the state handlers called from JSR ($8197,x).
  * State $02 ($36=$02) is the normal "game running" NMI-acknowledged handler.
  */
-void smk_808067(void) {
+RECOMP_PATCH(smk_808067, 0x808067) {
     /* LDA $0162 / BMI -> skip if negative */
     op_lda_abs16(0x0162);
     if (g_cpu.flag_N) return; /* BMI $8097 -> RTS */
@@ -198,7 +198,7 @@ void smk_808067(void) {
  *
  * For now, implements the frame counter increment and basic flow.
  */
-void smk_8080BA(void) {
+RECOMP_PATCH(smk_8080BA, 0x8080BA) {
     /* INC $38 — game frame counter */
     op_inc_dp16(0x38);
 
@@ -223,7 +223,7 @@ void smk_8080BA(void) {
  *   JSL $8590B1
  *   RTS
  */
-void smk_8080CA(void) {
+RECOMP_PATCH(smk_8080CA, 0x8080CA) {
     op_inc_dp16(0x38);
 
     op_lda_imm16(0x0060);
@@ -244,7 +244,7 @@ void smk_8080CA(void) {
  *   JSR $81B5        ; audio/input cleanup
  *   RTS
  */
-void smk_80824D(void) {
+RECOMP_PATCH(smk_80824D, 0x80824D) {
     op_rep(0x30);
 
     op_lda_long16(0x00, 0x0044);
@@ -271,7 +271,7 @@ void smk_80824D(void) {
  *
  * Input handling is added here (original handles it elsewhere).
  */
-void smk_808174(void) {
+RECOMP_PATCH(smk_808174, 0x808174) {
     op_rep(0x30);
     op_inc_dp16(0x38);
 
@@ -368,7 +368,7 @@ void smk_808174(void) {
  *
  * Original: check $44, set $44, OAM DMA, JSL $088C54, JSR $81B8
  */
-void smk_808369(void) {
+RECOMP_PATCH(smk_808369, 0x808369) {
     op_rep(0x30);
 
     op_lda_long16(0x00, 0x0044);
@@ -395,14 +395,14 @@ void smk_808369(void) {
  * $80:8096 — Null state handler (just RTS)
  * State $00 and $1A both point here.
  */
-void smk_808096(void) {
+RECOMP_PATCH(smk_808096, 0x808096) {
     /* RTS — does nothing */
 }
 
 /*
  * $80:81DD — NMI state handler for state $00/$1A (minimal NMI)
  */
-void smk_8081DD(void) {
+RECOMP_PATCH(smk_8081DD, 0x8081DD) {
     /* Sets DP $44 = 1 to wake main loop from NMI wait */
     bus_wram_write16(g_cpu.DP + 0x44, 1);
 }
@@ -421,7 +421,7 @@ void smk_8081DD(void) {
  *   JSR $81B5      ; cleanup
  *   RTS
  */
-void smk_808237(void) {
+RECOMP_PATCH(smk_808237, 0x808237) {
     op_rep(0x30);
 
     /* LDA $000044 */
@@ -455,7 +455,7 @@ void smk_808237(void) {
  *   DP $48 = 0: no change
  * Result stored to $0160 (16-bit). High byte ($0161) written to INIDISP ($2100).
  */
-void smk_80B181(void) {
+RECOMP_PATCH(smk_80B181, 0x80B181) {
     op_rep(0x30);
 
     /* LDA $48 */
@@ -517,7 +517,7 @@ void smk_80B181(void) {
  *   LDA #$01 / STA $420B                ; trigger DMA ch0
  *   REP #$30 / RTS
  */
-void smk_80946E(void) {
+RECOMP_PATCH(smk_80946E, 0x80946E) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x80);
 
@@ -561,7 +561,7 @@ void smk_80946E(void) {
  *   JSL $81CB35              ; additional HDMA/scroll setup
  *   PLB / RTL
  */
-void smk_85809B(void) {
+RECOMP_PATCH(smk_85809B, 0x85809B) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
@@ -597,7 +597,7 @@ void smk_85809B(void) {
  * For now, stubs the sub-calls — these handle audio and input which
  * LakeSnes processes internally.
  */
-void smk_8081B5(void) {
+RECOMP_PATCH(smk_8081B5, 0x8081B5) {
     /* JSR $9632 — APU port update
      * Writes DP $42/$43 to APU ports $2142/$2143, handles SPC700 transfers.
      * LakeSnes APU runs internally, so we write the ports to keep state in sync. */
@@ -635,7 +635,7 @@ void smk_8081B5(void) {
  *     trigger DMA ch0
  *   STZ $4A
  */
-void smk_81CB35(void) {
+RECOMP_PATCH(smk_81CB35, 0x81CB35) {
     /* INC $0D1A (frame counter for CB35 calls) */
     uint16_t cnt = bus_wram_read16(0x0D1A);
     bus_wram_write16(0x0D1A, cnt + 1);
@@ -709,7 +709,7 @@ void smk_81CB35(void) {
  *          ... (demo mode check, skipped if $0E32=0) ...
  *          PLA / STA $24,x / RTS
  */
-void smk_80843C(void) {
+RECOMP_PATCH(smk_80843C, 0x80843C) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x80);
     op_rep(0x30);
@@ -751,7 +751,7 @@ void smk_80843C(void) {
  * START → transition $14 (player/cup select)
  * Timer $1040 >= $0642 → attract/demo mode (not yet implemented)
  */
-void smk_80853D(void) {
+RECOMP_PATCH(smk_80853D, 0x80853D) {
     op_rep(0x30);
 
     /* LDA #$0060 / STA $015E — fade step */

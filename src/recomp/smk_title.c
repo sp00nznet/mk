@@ -7,7 +7,7 @@
  */
 
 #include "smk/functions.h"
-#include "smk/cpu_ops.h"
+
 #include <snesrecomp/snesrecomp.h>
 #include <string.h>
 #include <stdio.h>
@@ -35,7 +35,7 @@
  *
  * After decompression, the buffer is DMA'd to the specified VRAM address.
  */
-void smk_84E09E(void) {
+RECOMP_PATCH(smk_84E09E, 0x84E09E) {
     uint16_t vram_dest = g_cpu.X;
     uint16_t data_ptr = g_cpu.Y;
     uint8_t data_bank = CPU_A16() & 0xFF;
@@ -191,7 +191,7 @@ void smk_84E09E(void) {
  * Sets BG tile data/map addresses, screen mode, main/sub screen
  * designation, and disables DMA/HDMA/NMI.
  */
-void smk_81E50D(void) {
+RECOMP_PATCH(smk_81E50D, 0x81E50D) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
 
@@ -255,7 +255,7 @@ void smk_81E50D(void) {
  * Calls $84:E09E with: Y=$1996, A=$00C7, X=$0000
  * → Decompress tile data from $C7:1996 to VRAM $0000
  */
-void smk_81E10A(void) {
+RECOMP_PATCH(smk_81E10A, 0x81E10A) {
     op_ldy_imm16(0x1996);
     op_lda_imm16(0x00C7);
     op_ldx_imm16(0x0000);
@@ -268,7 +268,7 @@ void smk_81E10A(void) {
  * Calls $84:E09E with: Y=$0B29, A=$00C7, X=$C000
  * → Decompress tilemap from $C7:0B29 to VRAM $C000
  */
-void smk_81E118(void) {
+RECOMP_PATCH(smk_81E118, 0x81E118) {
     op_ldy_imm16(0x0B29);
     op_lda_imm16(0x00C7);
     op_ldx_imm16(0xC000);
@@ -289,7 +289,7 @@ void smk_81E118(void) {
  * Calls $84:E09E with: Y=$0594, A=$00C4, X=$8000
  * → Decompress data from $C4:0594 to VRAM $8000
  */
-void smk_81E584(void) {
+RECOMP_PATCH(smk_81E584, 0x81E584) {
     op_ldy_imm16(0x0594);
     op_lda_imm16(0x00C4);
     op_ldx_imm16(0x8000);
@@ -315,7 +315,7 @@ void smk_81E584(void) {
  *              8KB source → 16KB output at $7F:A000-$7F:DFFF.
  * 3. $81:E584 — Decompress additional data from $C4:0594 → $7F:8000
  */
-void smk_81E576(void) {
+RECOMP_PATCH(smk_81E576, 0x81E576) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
     op_rep(0x30);
@@ -361,7 +361,7 @@ void smk_81E576(void) {
  * DMA transfers tilemap data from WRAM $7F:D200/$7F:D2C0
  * to VRAM $5060/$5160 (64 bytes each).
  */
-void smk_81E933(void) {
+RECOMP_PATCH(smk_81E933, 0x81E933) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
 
@@ -418,7 +418,7 @@ void smk_81E933(void) {
  * mosaic, SETINI. Fill OAM mirror at $0200 with offscreen coords ($E0F8).
  * Clear OAM high table at $0400.
  */
-void smk_84F38C(void) {
+RECOMP_PATCH(smk_84F38C, 0x84F38C) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x84);
     op_sep(0x30);
@@ -479,7 +479,7 @@ void smk_84F38C(void) {
  * Sets display configuration variables and HDMA window parameters.
  * Called during mode select/race screen transitions.
  */
-void smk_84F421(void) {
+RECOMP_PATCH(smk_84F421, 0x84F421) {
     op_rep(0x30);
 
     /* Display/window config in DP */
@@ -509,7 +509,7 @@ void smk_84F421(void) {
  * Configures PPU for the mode select / race setup screens.
  * Mode 0, all layers enabled, BG tilemap addresses for 4 layers.
  */
-void smk_84F45A(void) {
+RECOMP_PATCH(smk_84F45A, 0x84F45A) {
     op_sep(0x30);
 
     bus_write8(0x84, 0x2105, 0x00);  /* BGMODE: Mode 0 */
@@ -530,7 +530,7 @@ void smk_84F45A(void) {
  * Sums words at $30:67F2-$30:67F5, compares with checksum at $30:67F0.
  * If mismatch, zeroes the save data.
  */
-void smk_84FCF1(void) {
+RECOMP_PATCH(smk_84FCF1, 0x84FCF1) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x84);
     op_rep(0x30);
@@ -569,7 +569,7 @@ void smk_84FCF1(void) {
  * 6. OAM/sprite table init ($85:8F84)
  * 7. Set DP vars ($8C=$3800, $8E=0, $62=0)
  */
-void smk_858000(void) {
+RECOMP_PATCH(smk_858000, 0x858000) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
     op_rep(0x30);
@@ -767,7 +767,7 @@ void smk_858000(void) {
  * Called when DP $32 = $04 (transition to title screen).
  * Sets up PPU, loads graphics/tilemaps/palettes, initializes state.
  */
-void smk_81E0AD(void) {
+RECOMP_PATCH(smk_81E0AD, 0x81E0AD) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x81);
     op_rep(0x30);
@@ -1445,7 +1445,7 @@ static void smk_build_oam_from_slots(void) {
  * Called from $80:80BA each frame during the title screen.
  * Mode dispatch: mode 0 builds OAM, mode 1 handles input.
  */
-void smk_858045(void) {
+RECOMP_PATCH(smk_858045, 0x858045) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
@@ -1503,7 +1503,7 @@ void smk_858045(void) {
  *
  * Since we have no joypad input yet, $7B stays 0 and this is effectively a no-op.
  */
-void smk_84FD25(void) {
+RECOMP_PATCH(smk_84FD25, 0x84FD25) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x84);
     op_rep(0x30);
@@ -2030,7 +2030,7 @@ static void sub_e72e(void) {
  * Main entry point: loads all BG tile data, tilemaps, palettes,
  * and configuration for the mode select (state $14) screen.
  */
-void smk_81E627(void) {
+RECOMP_PATCH(smk_81E627, 0x81E627) {
     printf("smk: E627 mode select graphics loading begin\n");
 
     sub_e631();   /* BG tilemap/graphics */
@@ -2058,7 +2058,7 @@ void smk_81E627(void) {
  * Original: JSL $84F421, table lookups based on $2E/$1012/$1112,
  *           sets DP $66/$68 viewport positions, JSL $84F45A
  */
-void smk_8591DE(void) {
+RECOMP_PATCH(smk_8591DE, 0x8591DE) {
     /* JSL $84F421 — viewport/HDMA setup */
     smk_84F421();
 
@@ -2114,7 +2114,7 @@ void smk_8591DE(void) {
  *   Load 256 CGRAM colors from $7F:E800
  *   If $2E != 0, JSR $91B4 + $91BB
  */
-void smk_85915F(void) {
+RECOMP_PATCH(smk_85915F, 0x85915F) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
     op_sep(0x30);
@@ -2189,7 +2189,7 @@ void smk_85915F(void) {
  *   JSL $81CB98    ; HDMA/sprite slot builder
  *   RTS
  */
-void smk_859239(void) {
+RECOMP_PATCH(smk_859239, 0x859239) {
     /* The sprite init table at $85:92A3 defines 8 sprite slots
      * with X/Y positions and tile attributes.
      * $81:CB98 reads this table and initializes each slot.
@@ -2336,7 +2336,7 @@ static void sub_cbe4(void) {
     sub_93fa(0x5040, 0xA100);  /* $7F:A100 → VRAM $5040/$5140 */
 }
 
-void smk_85909B(void) {
+RECOMP_PATCH(smk_85909B, 0x85909B) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
@@ -2821,7 +2821,7 @@ static void smk_84_F48D(void) {
  *
  * Original: PHB/PHK/PLB, 10 sub-calls, PLB/RTL
  */
-void smk_8590B1(void) {
+RECOMP_PATCH(smk_8590B1, 0x8590B1) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
@@ -2859,7 +2859,7 @@ void smk_8590B1(void) {
  *
  * Original: PHB/PHK/PLB, JSL $81CB35, multiple DMA/scroll pairs, PLB/RTL
  */
-void smk_8590D7(void) {
+RECOMP_PATCH(smk_8590D7, 0x8590D7) {
     uint8_t saved_db = g_cpu.DB;
     OP_SET_DB(0x85);
 
