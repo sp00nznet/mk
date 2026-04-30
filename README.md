@@ -26,15 +26,20 @@ All recompiled functions are defined with `RECOMP_PATCH(name, snes_addr) { ... }
 - Joypad input: SDL keyboard → SNES auto-joypad → WRAM with edge detection
 - HDMA channel 1: indirect mode window masking ($2126/$2127)
 - Mode select screen (state $14): graphics decompression, PPU init, simple menu input
+- Mode select OAM offscreen filler ($81:94C2 equivalent) — slots 4-127 pinned to Y=$E0 so leftover title-screen sprites don't bleed onto mode select
 - Character select screen (state $06): PPU Mode 0, tile DMA, palette loading, 8-character grid navigation with D-pad, confirm/cancel, transition trigger
 - SRAM checksum validation and save data erase menu (button-gated, matching original logic)
 - LakeSnes PPU renders all 224 scanlines per frame
 - SDL2 window at 768×672 (3× scale), 60fps vsync, keyboard input
 
 ### What's next
-- Mode select screen graphics (text overlays for GP/Match Race/Battle Mode)
+- Mode select menu text (GP / Match Race / Battle Mode) — open investigation. ROM analysis confirms the state $14 handler only places 4 large (16x16) sprites forming a 64x16 selection frame and sets TM=$10 (OBJ-only), so text source remains unidentified. A scheduled research agent is auditing the Yoshifanatic1 and jvipond disassemblies to narrow the hypothesis space.
 - Character portraits on the character select grid
 - Race screen (Mode 7 rendering, DSP-1 projection math, full gameplay — DSP-1 HLE backend now active)
+
+### Recent (April 2026)
+- **Auto-registered dispatch** via `RECOMP_PATCH(name, snes_addr) { ... }` — replaced central `smk_register_all()` boilerplate with linker-priority static constructors. Pattern inspired by N64Recomp's `RECOMP_PATCH`. See [snesrecomp/recomp_patch.h](https://github.com/sp00nznet/snesrecomp/blob/main/include/snesrecomp/recomp_patch.h).
+- **Public 65816 op kit** — `<snesrecomp/cpu_ops.h>` promoted out of game-private space. Any SNES recomp project linking snesrecomp now has `op_lda_*`, `op_sta_*`, `op_rep`, `op_php`/`op_plp`, … available as inline helpers.
 
 ## Architecture
 
