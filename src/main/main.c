@@ -76,9 +76,14 @@ static void parse_script(void) {
     }
 }
 
+/* When locking input (scripted/headless runs), the script is the ONLY source
+ * of input — the SDL keyboard read in begin_frame is fully overridden so stray
+ * window focus / keypresses can't perturb a deterministic run. */
+static int s_lock_input = 0;
+
 static void apply_script(int frame) {
     struct Snes *snes = snesrecomp_get_snes();
-    if (!snes || s_script_n == 0) return;
+    if (!snes || (!s_lock_input && s_script_n == 0)) return;
     /* OR the active windows per button — multiple entries may target the same
      * button at different frames, so a later inactive entry must not clear an
      * earlier active one. */
@@ -142,6 +147,7 @@ int main(int argc, char *argv[]) {
     printf("Running... (press Escape to quit)\n\n");
 
     parse_script();
+    s_lock_input = (getenv("SMK_SCRIPT") != NULL) || (getenv("SMK_HEADLESS") != NULL);
     int max_frames = 0;
     {
         const char *mf = getenv("SMK_MAX_FRAMES");
@@ -154,6 +160,22 @@ int main(int argc, char *argv[]) {
     while (snesrecomp_begin_frame()) {
         /* Apply scripted input (after begin_frame's keyboard read) */
         apply_script(frame_no);
+
+        /* Hybrid: navigate menus with recompiled handlers, then latch into
+         * force-interpret once a target state is reached so the genuine ROM
+         * drives gameplay. SMK_FORCE_FROM_STATE=<hex $36 value>. */
+        {
+            const char *ffs = getenv("SMK_FORCE_FROM_STATE");
+            if (ffs) {
+                static int latched = 0;
+                if (!latched && bus_wram_read16(0x36) == (uint16_t)strtol(ffs, NULL, 16)) {
+                    latched = 1;
+                    recomp_interp_set_force(true);
+                    printf("smk: force-interpret latched at state $%s (frame %d)\n",
+                           ffs, frame_no);
+                }
+            }
+        }
 
         /* Clear NMI flag before NMI handler — the handler itself sets $44
          * (smk_808237 sets $44=$FFFF, smk_8081DD sets $44=1).
@@ -187,6 +209,12 @@ int main(int argc, char *argv[]) {
                 printf("smk[f%d]: STATE $36=%04X  $32=%04X\n", frame_no, s36, s32);
                 last36 = s36; last32 = s32;
             }
+        }
+
+        if (getenv("SMK_TRACE_STATE") && (frame_no % 300 == 0 || (frame_no >= 1630 && frame_no <= 1650))) {
+            printf("smk[f%d]: $36=%04X $32=%04X $1040=%04X $0E32=%04X\n",
+                   frame_no, bus_wram_read16(0x36), bus_wram_read16(0x32),
+                   bus_wram_read16(0x1040), bus_wram_read16(0x0E32));
         }
 
         if (max_frames > 0 && frame_no >= max_frames) {
