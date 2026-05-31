@@ -278,7 +278,9 @@ RECOMP_PATCH(smk_81E067, 0x81E067) {
     {
         uint16_t handler = bus_read16(0x81, 0xE049 + transition);
         uint32_t full_addr = 0x810000 | handler;
-        if (!func_table_call(full_addr)) {
+        /* JSR ($E049,x): recompiled transition handler if present, else
+         * interpret the original ROM transition routine (RTS semantics). */
+        if (!func_table_call_jsr(full_addr)) {
             printf("smk: transition handler $%06X not yet recompiled (state=$%04X)\n",
                    full_addr, transition);
         }

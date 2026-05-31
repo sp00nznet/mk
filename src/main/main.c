@@ -10,10 +10,92 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+/* LakeSnes button injection (for scripted/automated input) */
+extern struct Snes *snesrecomp_get_snes(void);
+void snes_setButtonState(struct Snes *snes, int player, int button, bool pressed);
+void snes_doAutoJoypad(struct Snes *snes);
 
 static const char *find_rom_path(int argc, char *argv[]) {
     if (argc >= 2) return argv[1];
     return "Super Mario Kart (USA).sfc";
+}
+
+/*
+ * Scripted input for automated testing.
+ *
+ * Set SMK_SCRIPT to a comma-separated list of "frame:button" pairs, e.g.
+ *   SMK_SCRIPT="300:START,360:B,420:B"
+ * The named button is held for ~4 frames starting at the given frame.
+ * Buttons: B Y SELECT START UP DOWN LEFT RIGHT A X L R
+ * Set SMK_MAX_FRAMES to auto-exit after N frames (dumps PPU on exit).
+ * Set SMK_DUMP_PREFIX to control where periodic PPU dumps are written.
+ */
+static int script_button_index(const char *name) {
+    if (!strcmp(name, "B")) return 0;
+    if (!strcmp(name, "Y")) return 1;
+    if (!strcmp(name, "SELECT")) return 2;
+    if (!strcmp(name, "START")) return 3;
+    if (!strcmp(name, "UP")) return 4;
+    if (!strcmp(name, "DOWN")) return 5;
+    if (!strcmp(name, "LEFT")) return 6;
+    if (!strcmp(name, "RIGHT")) return 7;
+    if (!strcmp(name, "A")) return 8;
+    if (!strcmp(name, "X")) return 9;
+    if (!strcmp(name, "L")) return 10;
+    if (!strcmp(name, "R")) return 11;
+    return -1;
+}
+
+#define SCRIPT_MAX 32
+static struct { int frame; int btn; } s_script[SCRIPT_MAX];
+static int s_script_n = 0;
+#define SCRIPT_HOLD 4
+
+static void parse_script(void) {
+    const char *s = getenv("SMK_SCRIPT");
+    if (!s) return;
+    char buf[512];
+    strncpy(buf, s, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *tok = strtok(buf, ",");
+    while (tok && s_script_n < SCRIPT_MAX) {
+        char name[32];
+        int frame;
+        if (sscanf(tok, "%d:%31s", &frame, name) == 2) {
+            int b = script_button_index(name);
+            if (b >= 0) {
+                s_script[s_script_n].frame = frame;
+                s_script[s_script_n].btn = b;
+                s_script_n++;
+                printf("smk: scripted input frame %d -> %s\n", frame, name);
+            }
+        }
+        tok = strtok(NULL, ",");
+    }
+}
+
+static void apply_script(int frame) {
+    struct Snes *snes = snesrecomp_get_snes();
+    if (!snes || s_script_n == 0) return;
+    /* OR the active windows per button — multiple entries may target the same
+     * button at different frames, so a later inactive entry must not clear an
+     * earlier active one. */
+    int held[12] = {0};
+    for (int i = 0; i < s_script_n; i++) {
+        if (frame >= s_script[i].frame &&
+            frame < s_script[i].frame + SCRIPT_HOLD) {
+            held[s_script[i].btn] = 1;
+        }
+    }
+    for (int b = 0; b < 12; b++) {
+        snes_setButtonState(snes, 1, b, held[b] ? true : false);
+    }
+    /* begin_frame already ran the auto-joypad read against the keyboard state
+     * (all-clear in headless/scripted runs); re-run it so the injected buttons
+     * land in the auto-read registers ($4218-) for this frame. */
+    snes_doAutoJoypad(snes);
 }
 
 int main(int argc, char *argv[]) {
@@ -40,6 +122,18 @@ int main(int argc, char *argv[]) {
     /* Recompiled functions are auto-registered via RECOMP_PATCH static
      * constructors — see ext/snesrecomp/include/snesrecomp/recomp_patch.h. */
 
+    /* Force-interpret mode: run the genuine ROM for init/transitions/state
+     * handlers via the LakeSnes CPU, using the recompiled frame shells only
+     * for orchestration. Lets the full game loop run while recompiled
+     * functions are still partial. Default ON; set SMK_INTERP=0 to prefer
+     * recompiled functions where available. */
+    {
+        const char *interp = getenv("SMK_INTERP");
+        bool force = (interp == NULL) || (atoi(interp) != 0);
+        recomp_interp_set_force(force);
+        printf("smk: interpreter force mode = %s\n", force ? "ON" : "OFF");
+    }
+
     /* === Run the boot chain === */
     printf("--- Running boot chain ---\n");
     smk_80FF70();
@@ -47,8 +141,20 @@ int main(int argc, char *argv[]) {
 
     printf("Running... (press Escape to quit)\n\n");
 
+    parse_script();
+    int max_frames = 0;
+    {
+        const char *mf = getenv("SMK_MAX_FRAMES");
+        if (mf) max_frames = atoi(mf);
+    }
+    const char *dump_prefix = getenv("SMK_DUMP_PREFIX");
+    int frame_no = 0;
+
     /* === Main frame loop === */
     while (snesrecomp_begin_frame()) {
+        /* Apply scripted input (after begin_frame's keyboard read) */
+        apply_script(frame_no);
+
         /* Clear NMI flag before NMI handler — the handler itself sets $44
          * (smk_808237 sets $44=$FFFF, smk_8081DD sets $44=1).
          * If we pre-set $44=1, state $04's BNE check exits early. */
@@ -63,12 +169,34 @@ int main(int argc, char *argv[]) {
         /* Render PPU and present */
         snesrecomp_end_frame();
 
-        {
-            static int fc = 0;
-            fc++;
-            if (fc == 535) {
-                snesrecomp_dump_ppu("D:/recomp/snes/mk/ppu_state.log");
+        frame_no++;
+
+        /* Periodic PPU dump for automated inspection */
+        if (dump_prefix) {
+            char path[512];
+            if (frame_no % 120 == 0) {
+                snprintf(path, sizeof(path), "%s_f%04d.log", dump_prefix, frame_no);
+                snesrecomp_dump_ppu(path);
             }
+        }
+
+        if (getenv("SMK_TRACE_STATE")) {
+            static uint16_t last36 = 0xABCD, last32 = 0xABCD;
+            uint16_t s36 = bus_wram_read16(0x36), s32 = bus_wram_read16(0x32);
+            if (s36 != last36 || s32 != last32) {
+                printf("smk[f%d]: STATE $36=%04X  $32=%04X\n", frame_no, s36, s32);
+                last36 = s36; last32 = s32;
+            }
+        }
+
+        if (max_frames > 0 && frame_no >= max_frames) {
+            if (dump_prefix) {
+                char path[512];
+                snprintf(path, sizeof(path), "%s_final.log", dump_prefix);
+                snesrecomp_dump_ppu(path);
+            }
+            printf("smk: reached SMK_MAX_FRAMES=%d, exiting\n", max_frames);
+            break;
         }
     }
 

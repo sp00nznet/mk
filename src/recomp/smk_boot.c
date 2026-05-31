@@ -72,7 +72,11 @@ RECOMP_PATCH(smk_80803A, 0x80803A) {
     /* STA $4201 — WRIO = $8F */
     op_sta_abs8(0x4201);
 
-    /* JSL $81E000 — full initialization */
+    /* JSL $81E000 — full initialization.
+     * Always the recompiled version: the genuine ROM init does a blocking
+     * SPC700 handshake during APU upload, which can't complete under untimed
+     * interpretation. The recompiled init handles the APU/DSP setup without
+     * blocking, then the per-frame loop is interpreted. */
     smk_81E000();
 
     printf("smk: boot chain complete, entering main loop\n");
@@ -101,7 +105,11 @@ RECOMP_PATCH(smk_808056, 0x808056) {
 
     op_rep(0x30);       /* 16-bit A and X/Y */
 
-    /* JSL $81E067 — frame setup */
+    /* JSL $81E067 — frame setup / transition.
+     * Always the recompiled shell: the genuine ROM orchestrator waits for a
+     * vblank/NMI across frame boundaries (which the shell intentionally drops).
+     * The shell dispatches the transition LEAF handler, which force-interpret
+     * mode runs from the genuine ROM (graphics load, no NMI wait). */
     smk_81E067();
 
     /* STZ $44 — clear NMI flag (in original, waits for NMI to set it) */
@@ -113,13 +121,13 @@ RECOMP_PATCH(smk_808056, 0x808056) {
     /* LDX $36 — load game state index */
     op_ldx_dp16(0x36);
 
-    /* JSR ($8197,x) — call state handler via indirect table */
+    /* JSR ($8197,x) — call state handler via indirect table.
+     * RTS semantics: recompiled handler if present, else interpret. */
     {
         uint16_t table_addr = 0x8197;
         uint16_t handler = bus_read16(0x80, table_addr + g_cpu.X);
-        /* Call the handler if it's registered */
         uint32_t full_addr = 0x800000 | handler;
-        func_table_call(full_addr);
+        func_table_call_jsr(full_addr);
     }
 
     g_cpu.DB = saved_db;
@@ -158,7 +166,7 @@ RECOMP_PATCH(smk_808000, 0x808000) {
         uint16_t table_addr = 0x81BF;
         uint16_t handler = bus_read16(0x80, table_addr + g_cpu.X);
         uint32_t full_addr = 0x800000 | handler;
-        func_table_call(full_addr);
+        func_table_call_jsr(full_addr);
     }
 
     /* PLY / PLX / PLA / PLB / PLP */
