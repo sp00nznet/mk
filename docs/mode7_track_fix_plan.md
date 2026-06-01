@@ -34,15 +34,46 @@ The plan below was executed. Findings, in order of certainty:
    `$2126` (window) — none touch `$2122`/`$2121`; CGRAM is identical before/after
    the scanline loop.
 
-6. **Open paradox = the precise next lead.** `SMK_CG_DEBUG` counts only 515
-   total `$2122` writes through `bus_write8` (512 = one gradient upload from
-   `$85:9ECD`, +3 stray) and `SMK_DMA_DEBUG` shows **no** CGRAM DMA — yet CGRAM
-   transitions gradient→correct→garbage across frames. Something changes
-   `ppu->cgram` outside the watched write/DMA paths, OR the intro does a
-   per-frame CGRAM refresh that snesrecomp's frame ordering breaks. **Next:** a
-   single-run, per-frame CGRAM-value + writer trace across f1790–1802 (env
-   `SMK_CG_DEBUG` + a frame stamp) to catch the exact writer/ordering, then fix
-   the frame-model step that drops/mis-times it.
+6. **CONCLUSIVE ROOT CAUSE — stale DMA channel registers at race start.**
+   `SMK_DMA_LOG` (in shared `dma_doDma`) traces every CGRAM GPDMA with its CGADD
+   in BOTH builds. Native vs recomp at race start:
+
+   ```
+   NATIVE (clean, repeats every frame):
+     src=7E:3BC0 size=2C CGADD=A0   OBJ pal $A0-B5 (WRAM)
+     src=7E:3B80 size=2C CGADD=80   OBJ pal $80-95 (WRAM)
+   RECOMP (broken):
+     src=7E:3BC0 size=2C CGADD=A0   ✓
+     src=C4:5D00 size=80 CGADD=B6   ✗ STALE src (ROM, from a prior VRAM DMA), CGADD not reset
+     src=C4:5B00 size=80 CGADD=F6   ✗ STALE src, wraps CGADD $F6→$FF→$00-$35
+   ```
+
+   Recomp **fires `$420B` CGRAM-DMA triggers without the per-DMA channel setup**
+   (`$4302/$4304/$4305` src+size, `$2121` CGADD) that native performs. It reuses
+   stale `$C4`-ROM source + `$0080` size left from earlier VRAM *tile* DMAs, and
+   CGADD auto-increments instead of resetting — so non-palette ROM data wraps
+   into CGRAM `$00-$35` and destroys the Mode-7 BG palette. (Verified: a
+   simulation that applies the recomp DMA list reproduces the exact garbage
+   bit-for-bit; the `$C4:5B00/5D00` bytes are `0000 0001 0002 0003…`, clearly
+   not palette colors.) Native instead runs a tidy 2-entry WRAM OBJ-palette
+   refresh loop and never wraps.
+
+   ⇒ The race-intro **control flow diverges** under snesrecomp's frame model:
+   the game skips the OBJ-palette DMA-setup instructions but still hits the
+   `$420B` trigger. This is the frame-model bug surfacing as game-logic
+   divergence.
+
+   **FIX DIRECTION:** find why the DMA-setup writes for the 2nd/3rd OBJ-palette
+   transfers don't execute in recomp. Trace `$4302/$4304/$4305/$2121/$420B` in
+   sequence across the race-intro frames (~1790-1800) and compare to native:
+     - If the game *does* write them but recomp loses them → frame-model
+       ordering (NMI/main/end_frame) or the 2-step `dma_handleDma` in `bus.c`
+       is eating writes / mis-sequencing. Fix the ordering.
+     - If the game *doesn't* write them in recomp → a wrong branch upstream
+       (the intro state machine read a status/flag snesrecomp fakes wrong, e.g.
+       `$4212`/APU/NMI-count). Find the divergent branch input and correct it.
+   Either way, validate with `lakesnes_ref` (must stay clean) + `SMK_DMA_LOG`
+   parity, then a screenshot of the race.
 
 Tooling added: `tools/lakesnes_ref.c` (native ground truth), `SMK_DMA_DEBUG` /
 `SMK_CG_DEBUG` / `SMK_HDMA_DEBUG` in snesrecomp, CGRAM in SMKSNAP2,
