@@ -80,16 +80,44 @@ The plan below was executed. Findings, in order of certainty:
    data into the Mode-7 palette. ⇒ recomp **enters the VRAM-DMA loop mid-body**,
    skipping `80:8E09`. A control-flow divergence under the frame model.
 
-   **FIX DIRECTION (next):** find why PC reaches `80:8E2B` without `80:8E09` for
-   the first 1-2 iterations. Disassemble `$80:8E00-8E50` to learn the loop's
-   structure and entry points, then determine what makes recomp enter mid-loop:
-     - An NMI/frame boundary firing mid-routine where snesrecomp's manual NMI
-       (`smk_808000`) resumes at the wrong PC. Suspect the NMI/main/end_frame
-       split and the `$44` NMI-flag handling.
-     - A wrong branch from a status read (`$4212`/APU/NMI-count) snesrecomp fakes.
-   Validate with `lakesnes_ref` (stays clean) + `SMK_DMA_LOG` parity (recomp must
-   show native's `7E:3BC0@A0 / 7E:3B80@80` loop, no `$C4` sources), then a race
-   screenshot. Diagnostic: `SMK_DMASETUP_DEBUG` (in `bus.c`).
+   **DEEPER MECHANISM (disassembly + phase markers):**
+   - `$80:8E02` is a **VBlank DMA-queue flush**: prologue (`$8E02-8E11`) sets
+     DMAP/B-addr=`$2118` (VRAM) + VMAIN once; loop body (`$8E19+`) reads 6-byte
+     descriptors from a queue at `$0E9A,X` (counter `$4A`), DMAing each chunk.
+     `$8E19` is a **second entry point** (skips the prologue → uses whatever
+     B-address the caller left set — "code sharing" entry, cf. CLAUDE.md).
+   - `$80:83E7` is the OBJ-palette CGRAM upload: sets B-addr=`$2122`, DMAs one
+     chunk from `$7E:3BC0`/`$3B80` (CGADD `$A0`/`$80`, chosen by `$38` parity at
+     `$83F3 LDA $38;ROR;BCS`), then **RTS**.
+   - The whole corrupting sequence runs **inside the state-$02 NMI handler
+     `$80:81E9`, which is INTERPRETED** (no `RECOMP_PATCH`), in a single frame
+     (phase markers: all in `frame 1794 : NMI`). So it is NOT a recompiled-code
+     bug — it is interpreted game state diverging.
+   - Native (`SMK_DMA_LOG`): after the OBJ upload the flush runs with
+     B-addr=`$2118`, sending its `$C4` VRAM-tile descriptors to **VRAM**, and the
+     NMI does a second OBJ upload (`7E:3B80@80`). Recomp: the flush is entered at
+     `$8E19` with the **stale `$2122`** left by the OBJ upload, so the `$C4`
+     VRAM-tile descriptors land in **CGRAM `$00-$35`** → garble.
+
+   ⇒ ROOT: in recomp the `$8E19` flush runs with a stale CGRAM B-address (and/or
+   the DMA queue `$0E9A`/`$4A` holds VRAM-tile descriptors at the moment a CGRAM
+   flush is expected). Both stem from the interpreted NMI's DMA-queue + B-address
+   state diverging from native under snesrecomp's frame model.
+
+   **FIX DIRECTION (next):** find the caller in `$80:81E9`'s chain that invokes
+   the flush, and why recomp enters `$8E19` (stale B) where native enters
+   `$8E02` (prologue → `$2118`), OR why recomp's `$0E9A`/`$4A` queue differs.
+   Likely levers: (a) `$38` frame-parity / a per-frame flag the NMI reads that
+   snesrecomp advances differently; (b) the DMA queue being populated by main
+   (`smk_808056`) in a different order/state than native's continuous CPU. Trace
+   `$0E9A`/`$4A` writes + the JSR into `$8E02`/`$8E19` across frames 1790-1795 and
+   compare to native. Validate: `lakesnes_ref` stays clean, `SMK_DMA_LOG` parity
+   (recomp shows `7E:3BC0@A0 / 7E:3B80@80`, no `$C4` → CGRAM), then a race shot.
+   Diagnostics: `SMK_DMASETUP_DEBUG` (bus.c, +NMI/main markers in main.c),
+   `SMK_DMA_LOG` (dma.c, both builds).
+
+   _Status: fully localized; the remaining fix is a focused but non-trivial
+   interpreted-state divergence, not a one-liner._
 
 Tooling added: `tools/lakesnes_ref.c` (native ground truth), `SMK_DMA_DEBUG` /
 `SMK_CG_DEBUG` / `SMK_HDMA_DEBUG` in snesrecomp, CGRAM in SMKSNAP2,
