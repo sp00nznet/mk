@@ -2,6 +2,56 @@
 
 _Last updated: 2026-06-01_
 
+## ⭐ EXECUTED DIAGNOSIS — what we now KNOW (2026-06-01)
+
+The plan below was executed. Findings, in order of certainty:
+
+1. **The bug is 100% in snesrecomp's custom frame model.** `tools/lakesnes_ref`
+   runs the identical ROM through LakeSnes' native `snes_runFrame` and renders
+   the Mode-7 track **perfectly** (clean road, starting grid, karts, HUD) — see
+   `build/ref/native_*.bmp`. snesrecomp garbles it. Same ROM, same PPU code,
+   same DSP-1. ⇒ renderer, ROM, DSP-1, Mode-7 matrix, and char-data are all
+   exonerated. The fault is snesrecomp's manual begin/end_frame + HDMA driver.
+
+2. **It is a CGRAM (palette) corruption, not VRAM.** Diffing native vs
+   snesrecomp SMKSNAP2 dumps (`--vram-only`): VRAM `$0000-$5803` is byte-
+   identical (the whole Mode-7 tilemap+char region `$0000-$3FFF` is correct).
+   Only CGRAM diverges. Mode-7 BG1 uses CGRAM `$00-$7F`; the road indexes into a
+   wrong palette ⇒ the red/blue garble.
+
+3. **The palette SOURCE is correct.** The race palette is decompressed to WRAM
+   `$7E:3A80` (512 B) then uploaded to CGRAM. `$7E:3A80` is byte-identical
+   (512/512) to native and holds the right colors. So decompression is fine.
+
+4. **The corruption is a transient at race-start (~frame 1797).** Per-frame
+   CGRAM snapshots: correct track palette is present & stable f1728–f1794, then
+   in one ~6-frame window CGRAM is clobbered to garbage (`0000×6 0518 40BF`,
+   123 entries change) and **stays stuck forever** (native completes the intro
+   cleanly). This matches the broken intro never finishing.
+
+5. **HDMA does NOT clobber CGRAM.** `SMK_HDMA_DEBUG`: the active Mode-7 HDMA
+   channels target `$211B-$211E` (matrix), `$2105` (BGMODE), `$212C` (TM),
+   `$2126` (window) — none touch `$2122`/`$2121`; CGRAM is identical before/after
+   the scanline loop.
+
+6. **Open paradox = the precise next lead.** `SMK_CG_DEBUG` counts only 515
+   total `$2122` writes through `bus_write8` (512 = one gradient upload from
+   `$85:9ECD`, +3 stray) and `SMK_DMA_DEBUG` shows **no** CGRAM DMA — yet CGRAM
+   transitions gradient→correct→garbage across frames. Something changes
+   `ppu->cgram` outside the watched write/DMA paths, OR the intro does a
+   per-frame CGRAM refresh that snesrecomp's frame ordering breaks. **Next:** a
+   single-run, per-frame CGRAM-value + writer trace across f1790–1802 (env
+   `SMK_CG_DEBUG` + a frame stamp) to catch the exact writer/ordering, then fix
+   the frame-model step that drops/mis-times it.
+
+Tooling added: `tools/lakesnes_ref.c` (native ground truth), `SMK_DMA_DEBUG` /
+`SMK_CG_DEBUG` / `SMK_HDMA_DEBUG` in snesrecomp, CGRAM in SMKSNAP2,
+`diff_snapshots.py --vram-only`.
+
+---
+_Original plan (Mesen2 path — superseded by the self-contained lakesnes_ref
+ground truth above, but kept for reference):_
+
 ## Symptom
 In the attract-demo Mode-7 race (and gameplay), the road plane renders as a
 **garbled red/blue perspective field** instead of the real track surface.
