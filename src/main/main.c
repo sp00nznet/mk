@@ -211,10 +211,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if (getenv("SMK_TRACE_STATE") && (frame_no % 300 == 0 || (frame_no >= 1630 && frame_no <= 1650))) {
-            printf("smk[f%d]: $36=%04X $32=%04X $1040=%04X $0E32=%04X\n",
+        if (getenv("SMK_TRACE_STATE") && frame_no % 120 == 0) {
+            printf("smk[f%d]: $36=%04X $32=%04X $0158=%04X $0172=%04X $80=%04X\n",
                    frame_no, bus_wram_read16(0x36), bus_wram_read16(0x32),
-                   bus_wram_read16(0x1040), bus_wram_read16(0x0E32));
+                   bus_wram_read16(0x0158), bus_wram_read16(0x0172),
+                   bus_wram_read16(0x80));
         }
 
         if (max_frames > 0 && frame_no >= max_frames) {
