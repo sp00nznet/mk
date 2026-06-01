@@ -30,7 +30,8 @@ import re
 import struct
 import sys
 
-MAGIC = b"SMKSNAP1"
+MAGIC_V1 = b"SMKSNAP1"  # wram + vram
+MAGIC_V2 = b"SMKSNAP2"  # wram + vram + cgram
 
 # A few WRAM addresses worth naming in output (extend as needed). These are
 # direct-page / low-RAM offsets the project already tracks (see MEMORY.md).
@@ -43,20 +44,43 @@ KNOWN_WRAM = {
 }
 
 
+class Snap:
+    __slots__ = ("wram", "vram", "cgram")
+
+    def __init__(self, wram, vram, cgram):
+        self.wram = wram
+        self.vram = vram
+        self.cgram = cgram  # may be b"" for v1 snapshots
+
+
+def vram_region_tag(word_addr):
+    """Annotate a VRAM word address with its Mode-7 role. In Mode 7 the
+    128x128 tilemap lives in the LOW byte of words $0000-$3FFF and the 256-tile
+    8bpp character data in the HIGH byte of the same words."""
+    if word_addr < 0x4000:
+        return "  [Mode-7 map(lo)+char(hi)]"
+    return ""
+
+
 def load_snapshot(path):
     with open(path, "rb") as f:
         data = f.read()
-    if len(data) < 16 or data[:8] != MAGIC:
-        raise ValueError(f"{path}: bad magic / too short")
-    wram_size, vram_size = struct.unpack_from("<II", data, 8)
-    off = 16
-    wram = data[off:off + wram_size]
-    off += wram_size
-    vram = data[off:off + vram_size]
+    magic = data[:8]
+    if magic == MAGIC_V1:
+        wram_size, vram_size = struct.unpack_from("<II", data, 8)
+        off = 16
+        cgram_size = 0
+    elif magic == MAGIC_V2:
+        wram_size, vram_size, cgram_size = struct.unpack_from("<III", data, 8)
+        off = 20
+    else:
+        raise ValueError(f"{path}: bad magic {magic!r}")
+    wram = data[off:off + wram_size]; off += wram_size
+    vram = data[off:off + vram_size]; off += vram_size
+    cgram = data[off:off + cgram_size] if cgram_size else b""
     if len(wram) != wram_size or len(vram) != vram_size:
-        raise ValueError(f"{path}: truncated ({len(wram)}/{wram_size} wram, "
-                         f"{len(vram)}/{vram_size} vram)")
-    return wram, vram
+        raise ValueError(f"{path}: truncated")
+    return Snap(wram, vram, cgram)
 
 
 def frame_index(path):
@@ -65,7 +89,10 @@ def frame_index(path):
 
 
 def collect(prefix):
-    """Map frame_no -> filepath for a given snapshot prefix."""
+    """Map frame_no -> filepath. A direct .bin file (e.g. a Mesen2 reference
+    dump) maps to a single synthetic frame 0; a prefix globs the _fNNN stream."""
+    if os.path.isfile(prefix):
+        return {0: prefix}
     files = glob.glob(prefix + "_f*.bin")
     out = {}
     for p in files:
@@ -131,6 +158,8 @@ def main():
                     help="max diverging regions to print on first bad frame")
     ap.add_argument("--stop-on-first", action="store_true",
                     help="stop after the first diverging frame")
+    ap.add_argument("--vram-only", action="store_true",
+                    help="ignore WRAM; compare only VRAM + CGRAM (Mode-7 focus)")
     args = ap.parse_args()
 
     ref = collect(args.ref_prefix)
@@ -146,11 +175,12 @@ def main():
 
     first_bad = None
     for fno in common:
-        rw, rv = load_snapshot(ref[fno])
-        tw, tv = load_snapshot(test[fno])
-        wd = first_diff(rw, tw)
-        vd = first_diff(rv, tv)
-        if wd < 0 and vd < 0:
+        r = load_snapshot(ref[fno])
+        t = load_snapshot(test[fno])
+        wd = -1 if args.vram_only else first_diff(r.wram, t.wram)
+        vd = first_diff(r.vram, t.vram)
+        cd = first_diff(r.cgram, t.cgram) if (r.cgram and t.cgram) else -1
+        if wd < 0 and vd < 0 and cd < 0:
             continue
         if first_bad is None:
             first_bad = fno
@@ -158,31 +188,44 @@ def main():
         if wd >= 0:
             label = KNOWN_WRAM.get(wd, "")
             label = f" ({label})" if label else ""
-            parts.append(f"WRAM @ ${wd:05X}{label}: ref={rw[wd]:02X} test={tw[wd]:02X}")
+            parts.append(f"WRAM @ ${wd:05X}{label}: ref={r.wram[wd]:02X} test={t.wram[wd]:02X}")
         if vd >= 0:
             word = vd & ~1
-            ra = rv[word] | (rv[word + 1] << 8)
-            ta = tv[word] | (tv[word + 1] << 8)
+            ra = r.vram[word] | (r.vram[word + 1] << 8)
+            ta = t.vram[word] | (t.vram[word + 1] << 8)
             parts.append(f"VRAM word ${word // 2:04X}: ref={ra:04X} test={ta:04X}")
+        if cd >= 0:
+            word = cd & ~1
+            ra = r.cgram[word] | (r.cgram[word + 1] << 8)
+            ta = t.cgram[word] | (t.cgram[word + 1] << 8)
+            parts.append(f"CGRAM color ${word // 2:02X}: ref={ra:04X} test={ta:04X}")
         print(f"frame {fno:6d}  DIVERGES  " + "  |  ".join(parts))
 
         if fno == first_bad:
             # Detailed region report on the first bad frame.
-            wregions = diverging_regions(rw, tw, word=False)
-            vregions = diverging_regions(rv, tv, word=True)
             print(f"    -- first divergence detail (frame {fno}) --")
-            print(f"    WRAM diverging regions: {len(wregions)}")
-            for s, e in wregions[:args.max_regions]:
-                named = KNOWN_WRAM.get(s, "")
-                named = f"  {named}" if named else ""
-                print(f"      ${s:05X}-${e - 1:05X} ({e - s} bytes){named}")
-            if len(wregions) > args.max_regions:
-                print(f"      ... +{len(wregions) - args.max_regions} more")
-            print(f"    VRAM diverging word-regions: {len(vregions)}")
+            if not args.vram_only:
+                wregions = diverging_regions(r.wram, t.wram, word=False)
+                print(f"    WRAM diverging regions: {len(wregions)}")
+                for s, e in wregions[:args.max_regions]:
+                    named = KNOWN_WRAM.get(s, "")
+                    named = f"  {named}" if named else ""
+                    print(f"      ${s:05X}-${e - 1:05X} ({e - s} bytes){named}")
+                if len(wregions) > args.max_regions:
+                    print(f"      ... +{len(wregions) - args.max_regions} more")
+            vregions = diverging_regions(r.vram, t.vram, word=True)
+            print(f"    VRAM diverging word-regions: {len(vregions)}  "
+                  f"(total {sum(e - s for s, e in vregions)} words)")
             for s, e in vregions[:args.max_regions]:
-                print(f"      word ${s:04X}-${e - 1:04X} ({e - s} words)")
+                tag = vram_region_tag(s)
+                print(f"      word ${s:04X}-${e - 1:04X} ({e - s} words){tag}")
             if len(vregions) > args.max_regions:
                 print(f"      ... +{len(vregions) - args.max_regions} more")
+            if r.cgram and t.cgram:
+                cregions = diverging_regions(r.cgram, t.cgram, word=True)
+                print(f"    CGRAM diverging color-regions: {len(cregions)}")
+                for s, e in cregions[:args.max_regions]:
+                    print(f"      color ${s:02X}-${e - 1:02X} ({e - s} colors)")
             print()
             if args.stop_on_first:
                 break
