@@ -154,6 +154,13 @@ int main(int argc, char *argv[]) {
         if (mf) max_frames = atoi(mf);
     }
     const char *dump_prefix = getenv("SMK_DUMP_PREFIX");
+    /* Lockstep snapshot dump (WRAM+VRAM) for divergence analysis. */
+    const char *snapshot_prefix = getenv("SMK_SNAPSHOT_PREFIX");
+    int snapshot_every = 1;
+    {
+        const char *se = getenv("SMK_SNAPSHOT_EVERY");
+        if (se && atoi(se) > 0) snapshot_every = atoi(se);
+    }
     int frame_no = 0;
 
     /* === Main frame loop === */
@@ -192,6 +199,16 @@ int main(int argc, char *argv[]) {
         snesrecomp_end_frame();
 
         frame_no++;
+
+        /* Lockstep snapshot dump (WRAM+VRAM). SMK_SNAPSHOT_PREFIX=<dir/prefix>
+         * writes <prefix>_fNNNNNN.bin every SMK_SNAPSHOT_EVERY frames. Run once
+         * as a pure-interpreter reference and once with SMK_INTERP=0, then
+         * tools/diff_snapshots.py reports the first diverging address. */
+        if (snapshot_prefix && (frame_no % snapshot_every == 0)) {
+            char path[512];
+            snprintf(path, sizeof(path), "%s_f%06d.bin", snapshot_prefix, frame_no);
+            snesrecomp_dump_snapshot(path);
+        }
 
         /* Periodic PPU dump for automated inspection */
         if (dump_prefix) {

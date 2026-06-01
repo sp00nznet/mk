@@ -53,3 +53,10 @@ tools/mesen/Mesen2/
 tools/mesen/Mesen.zip
 tools/mesen/*.log
 tools/mesen/*.txt
+
+# Debug/diagnostic artifacts at repo root (PPU/OAM dumps, screenshots, scratch logs)
+# Produced by SMK_DUMP_PREFIX runs and ad-hoc debugging. Anchored to root only.
+/*.bmp
+/*.log
+/*.png
+!/title.png
