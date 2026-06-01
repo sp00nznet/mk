@@ -73,11 +73,20 @@ RECOMP_PATCH(smk_80803A, 0x80803A) {
     op_sta_abs8(0x4201);
 
     /* JSL $81E000 — full initialization.
-     * Always the recompiled version: the genuine ROM init does a blocking
-     * SPC700 handshake during APU upload, which can't complete under untimed
-     * interpretation. The recompiled init handles the APU/DSP setup without
-     * blocking, then the per-frame loop is interpreted. */
-    smk_81E000();
+     * In force-interpret mode, run the GENUINE ROM init: it calls the Mode-7
+     * raster init ($81:F7F1 -> $FB7E, sets $A4=6 + the per-scanline M7 HDMA
+     * pointers) which the recompiled init omits — without it the race road
+     * plane stays degenerate (gray). The interpreter advances the APU on
+     * $2140-$2143 so the init's SPC700 handshake completes. Outside force mode
+     * (recompiled-preferred), keep the recompiled init.
+     * Override with SMK_INTERP_INIT=0/1 if needed. */
+    {
+        extern char *getenv(const char *);
+        const char *e = getenv("SMK_INTERP_INIT");
+        int interp_init = e ? (e[0] != '0') : recomp_interp_force();
+        if (interp_init) func_table_call(0x81E000);
+        else smk_81E000();
+    }
 
     printf("smk: boot chain complete, entering main loop\n");
 

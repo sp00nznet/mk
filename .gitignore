@@ -49,3 +49,7 @@ tools/analyze/output/
 Thumbs.db
 .DS_Store
 desktop.ini
+tools/mesen/Mesen2/
+tools/mesen/Mesen.zip
+tools/mesen/*.log
+tools/mesen/*.txt
