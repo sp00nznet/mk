@@ -34,3 +34,9 @@ target_link_libraries(smk_launcher PRIVATE
 add_executable(oam_dumper tools/oam_dumper.c)
 target_include_directories(oam_dumper PRIVATE ext/snesrecomp/ext/LakeSnes)
 target_link_libraries(oam_dumper PRIVATE lakesnes_hw)
+
+# --- lakesnes_ref (ground truth: runs original ROM via native snes_runFrame,
+#     dumps SMKSNAP2 snapshot + BMP; used to isolate the Mode-7 garble) ---
+add_executable(lakesnes_ref tools/lakesnes_ref.c)
+target_include_directories(lakesnes_ref PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(lakesnes_ref PRIVATE lakesnes_hw)
