@@ -12,6 +12,10 @@ All recompiled functions are defined with `RECOMP_PATCH(name, snes_addr) { ... }
 
 ![Title Screen](titlewithchar.png)
 
+The Mode-7 race renders too — perspective track, lane markings, scenery, and HUD:
+
+![Mode-7 Race](mode7_race.png)
+
 ### What works
 - Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup → Mode 7 angle table
 - NMI handler with state dispatch, brightness fading, OAM DMA

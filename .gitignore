@@ -61,3 +61,4 @@ tools/mesen/*.txt
 /*.png
 !/title.png
 !/titlewithchar.png
+!/mode7_race.png

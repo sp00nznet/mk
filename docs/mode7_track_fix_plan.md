@@ -2,6 +2,32 @@
 
 _Last updated: 2026-06-01_
 
+## ✅ RESOLVED (2026-06-01)
+
+**Root cause:** snesrecomp doesn't advance PPU timing inside an interpreted
+routine, but interpreted writes to `$4200`/`$4207-$420A` still latch `irqWanted`,
+so an IRQ/NMI is serviced mid-routine. Its handler re-enters game code that
+reprograms DMA channel 0 (SMK's `$83E7` OBJ-palette CGRAM upload) right in the
+middle of another routine's VRAM DMA-flush loop (`$80:8E01`), leaving the
+channel's B-bus address at `$2122` (CGRAM). The resumed flush DMAs VRAM tile data
+into CGRAM, destroying the Mode-7 BG palette → the red/blue garble. Native
+(cycle-accurate) fires the interrupt at a different cycle, so no collision.
+
+**Fix:** `ext/snesrecomp/src/recomp_interp.c` — snapshot the 8 DMA channel
+registers when an interrupt is taken during interp, and restore them once the
+handler's RTI unwinds the stack. The handler's own DMAs already executed before
+the restore (so legitimate work like the OBJ upload sticks); only the channel
+*setup* is rewound so the interrupted flush resumes correctly. (Commits: parent
+`4135e3c`, snesrecomp `4d2bbfc`.)
+
+**Verified:** native-vs-recomp Mode-7 CGRAM matches exactly (0 diverging colors,
+was 26); VRAM `$0000-$3FFF` matches; the race track renders cleanly (gray road,
+lane markings, borders, hills, HUD); `$83E7` OBJ upload still runs; title/menu
+flow unaffected. The original investigation trail is kept below for reference.
+
+---
+
+
 ## ⭐ EXECUTED DIAGNOSIS — what we now KNOW (2026-06-01)
 
 The plan below was executed. Findings, in order of certainty:
