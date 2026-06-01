@@ -189,8 +189,16 @@ int main(int argc, char *argv[]) {
          * If we pre-set $44=1, state $04's BNE check exits early. */
         bus_wram_write16(g_cpu.DP + 0x44, 0);
 
+        /* Phase markers for DMA-setup tracing (correlate DMAs to NMI vs main
+         * and to frame boundaries). */
+        if (getenv("SMK_DMASETUP_DEBUG"))
+            fprintf(stderr, "==== frame %d : NMI (smk_808000) ====\n", frame_no);
+
         /* Run NMI handler (DMA, brightness, NMI state dispatch) */
         smk_808000();
+
+        if (getenv("SMK_DMASETUP_DEBUG"))
+            fprintf(stderr, "==== frame %d : MAIN (smk_808056) ====\n", frame_no);
 
         /* Run one main loop iteration (frame setup + state handler) */
         smk_808056();
