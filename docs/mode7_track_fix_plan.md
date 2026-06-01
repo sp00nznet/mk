@@ -63,17 +63,33 @@ The plan below was executed. Findings, in order of certainty:
    `$420B` trigger. This is the frame-model bug surfacing as game-logic
    divergence.
 
-   **FIX DIRECTION:** find why the DMA-setup writes for the 2nd/3rd OBJ-palette
-   transfers don't execute in recomp. Trace `$4302/$4304/$4305/$2121/$420B` in
-   sequence across the race-intro frames (~1790-1800) and compare to native:
-     - If the game *does* write them but recomp loses them → frame-model
-       ordering (NMI/main/end_frame) or the 2-step `dma_handleDma` in `bus.c`
-       is eating writes / mis-sequencing. Fix the ordering.
-     - If the game *doesn't* write them in recomp → a wrong branch upstream
-       (the intro state machine read a status/flag snesrecomp fakes wrong, e.g.
-       `$4212`/APU/NMI-count). Find the divergent branch input and correct it.
-   Either way, validate with `lakesnes_ref` (must stay clean) + `SMK_DMA_LOG`
-   parity, then a screenshot of the race.
+   **PINNED MECHANISM (SMK_DMASETUP_DEBUG, traces $4300-06/$2121/$420B + PC):**
+   ```
+   80:83ED  $4300=02 $4301=22   B-addr=$2122 (CGRAM), mode 2
+   80:8411  $2121=A0            CGADD=$A0
+   80:8439  $420B               DMA1: 7E:3BC0 -> CGRAM  OK
+   80:8E2B  src=C4:5D00 sz=80   (no $4300/$4301, no $2121!)
+   80:8E43  $420B               DMA2: C4:5D00 -> still $2122  BAD
+   80:8E2B  src=C4:5B00 sz=80
+   80:8E43  $420B               DMA3: C4:5B00 -> still $2122  BAD
+   80:8E09  $4300=01 $4301=18   B-addr=$2118 (VRAM)  <-- only AFTER DMA2/DMA3
+   ```
+   The VRAM-tile DMA loop body at `80:8E2B` ran twice **without its `80:8E09`
+   B-address setup** (`$4301=$18`/VRAM). Those transfers inherited the stale
+   `$2122` B-address from the OBJ-palette upload (`80:83ED`) and DMA'd VRAM tile
+   data into the Mode-7 palette. ⇒ recomp **enters the VRAM-DMA loop mid-body**,
+   skipping `80:8E09`. A control-flow divergence under the frame model.
+
+   **FIX DIRECTION (next):** find why PC reaches `80:8E2B` without `80:8E09` for
+   the first 1-2 iterations. Disassemble `$80:8E00-8E50` to learn the loop's
+   structure and entry points, then determine what makes recomp enter mid-loop:
+     - An NMI/frame boundary firing mid-routine where snesrecomp's manual NMI
+       (`smk_808000`) resumes at the wrong PC. Suspect the NMI/main/end_frame
+       split and the `$44` NMI-flag handling.
+     - A wrong branch from a status read (`$4212`/APU/NMI-count) snesrecomp fakes.
+   Validate with `lakesnes_ref` (stays clean) + `SMK_DMA_LOG` parity (recomp must
+   show native's `7E:3BC0@A0 / 7E:3B80@80` loop, no `$C4` sources), then a race
+   screenshot. Diagnostic: `SMK_DMASETUP_DEBUG` (in `bus.c`).
 
 Tooling added: `tools/lakesnes_ref.c` (native ground truth), `SMK_DMA_DEBUG` /
 `SMK_CG_DEBUG` / `SMK_HDMA_DEBUG` in snesrecomp, CGRAM in SMKSNAP2,
