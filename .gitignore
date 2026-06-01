@@ -60,3 +60,4 @@ tools/mesen/*.txt
 /*.log
 /*.png
 !/title.png
+!/titlewithchar.png

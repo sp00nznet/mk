@@ -10,7 +10,7 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 All recompiled functions are defined with `RECOMP_PATCH(name, snes_addr) { ... }` and auto-register in snesrecomp's dispatch table at static-init time — adding a new translated function is a one-line change at the definition site, no central list to maintain.
 
-![Title Screen](titlescreen.gif)
+![Title Screen](titlewithchar.png)
 
 ### What works
 - Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup → Mode 7 angle table
