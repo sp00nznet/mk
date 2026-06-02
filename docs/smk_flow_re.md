@@ -44,9 +44,29 @@ our own LakeSnes harness**:
   B, double B, RIGHT→B→B, Start×2). So driver-select→cup needs a specific
   completion sequence (cursor must land on a driver with the marquee showing its
   NAME, not the "CHOOSE YOUR DRIVER" prompt? a hold? a 2nd confirm after the kart
-  drives in?). NEXT: decode the `$80==$10` select path (`$85:8865`) and what gates
-  the cup advance; or trace what writes `$0150`/the sub-state when a driver is
-  truly locked in. Screenshot of the select (helmet) is the milestone.
+  drives in?).
+
+### Update — B selection STICKS but no cup advance (deep wall)
+- B genuinely selects: post-B the screen changes ~220 VRAM words and **stays**
+  (Mario keeps his helmet from f1600→f3600 — it does NOT revert; earlier "revert"
+  read was wrong). So the select is locked in.
+- BUT `$0150` (RaceCup) is **never written** across every advance pattern tried
+  (B; B+B delayed; B+Start; B+A; B+Y; RIGHT+B). The screen stays driver-select
+  (marquee still "CHOOSE YOUR DRIVER"); it does not transition to cup/class.
+- Select handler `$85:8865` is OAM/anim setup → `JMP ($83B1,X)` action table
+  (action 0/1→`$8893`, 2→`$88DB`, 3→`$8939`, 4→`$8986`, 5/6→`$89E2`); `$8893`
+  ends `LDA $85; AND #$01; JMP $89E7` (more anim). The cup advance is gated
+  somewhere deeper. `$0150` writers live in `$C0:8575/$C0:9CC0/$C1:C2D5/$C1:E0ED/
+  $C4:FAD1+` (the cup-select code).
+
+### DECISIVE next check (fork)
+Is this a harness bug or a flow misunderstanding? **Verify in snes9x:** after
+Select+Start → driver select, can a real run pick a driver and advance to
+cup/class → race? If snes9x advances, LakeSnes has a menu-state bug to find; if it
+also can't, then `$06` (entered via the `$85:85F1` Select+Start path) is a
+special/partial mode and the canonical game-start path is different (plain Start
+"does nothing" in both emus, which is itself suspicious). Either answer redirects
+the work cleanly.
 
 Tooling: `lakesnes_ref` `SMK_REF_SCRIPT` (input) + `SMK_WATCH_WRAM` (writes w/ PC).
 Entry recipe: SELECT+START bursts at f400/460/520/600/700 → driver select.
