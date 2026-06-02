@@ -74,6 +74,19 @@ gate **`$0E68 != 0`**. But:
 - Poking `$0E68` non-zero + pressing START did **not** transition (likely the game
   re-clears it before the read, or the gate decode is incomplete).
 
+### Round 2 findings (deeper, still unsolved)
+- The input loop is **Select-gated**: `$8559 BIT #$2000` (Select), `$855C BEQ`
+  skips unless Select is held; only then are B/**Start**/A checked. So even with
+  the gate open, the menu entry wants a **Select+Start**-style combo, not plain
+  START. (Or `$20/$22` use a non-standard bit order — unverified.)
+- PC-tracing (`SMK_PC_TRACE`) the handler: `$80854F`/`$808552` (the `$0E68` read +
+  BEQ) run every title frame and **always branch to `$80856E` (gate closed)**;
+  `$808554` (the input loop) is never reached. The loaded `$0E68` value (`A` at
+  `$808552`) is **always `$0000`**.
+- Poking `$0E68=1` is inconsistent: the value persists to end-of-frame (snapshot
+  shows `0001`), yet the handler still reads `0` at `$808552`, and poking it
+  alone causes no transition. The gate effectively cannot be forced from outside.
+
 ### Next angles (unsolved)
 1. Find what *sets* `$0E68` — likely an indexed/computed store, or it's set on a
    path not exercised by plain attract. Trace `$0E68` reads/writes across a full

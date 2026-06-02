@@ -170,9 +170,9 @@ int main(int argc, char **argv) {
     uint16_t last_state = 0xFFFF;
     for (int i = 1; i <= max_frames; i++) {
         if (g_script_n) ref_apply_script(snes, i);
-        /* one-shot: apply only on the exact frame (from), so the game then runs
-         * naturally (use a negative frame as "every frame" if ever needed). */
-        for (int k = 0; k < pk_n; k++) if (i == pk_from[k]) {
+        /* from >= 0: continuous from that frame. from < 0: one-shot at -from. */
+        for (int k = 0; k < pk_n; k++)
+          if (pk_from[k] >= 0 ? (i >= pk_from[k]) : (i == -pk_from[k])) {
             snes->ram[pk_off[k]] = pk_val[k] & 0xFF;
             snes->ram[pk_off[k] + 1] = (pk_val[k] >> 8) & 0xFF;
         }
