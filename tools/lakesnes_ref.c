@@ -70,15 +70,69 @@ static void write_bmp(const uint8_t *buf, const char *path) {
     fclose(bmp);
 }
 
+/* Button index map matches snesrecomp main.c (SMK_SCRIPT) and snes_setButtonState:
+ * B=0 Y=1 SELECT=2 START=3 UP=4 DOWN=5 LEFT=6 RIGHT=7 A=8 X=9 L=10 R=11 */
+static int ref_button_index(const char *n) {
+    if (!strcmp(n, "B")) return 0;      if (!strcmp(n, "Y")) return 1;
+    if (!strcmp(n, "SELECT")) return 2; if (!strcmp(n, "START")) return 3;
+    if (!strcmp(n, "UP")) return 4;     if (!strcmp(n, "DOWN")) return 5;
+    if (!strcmp(n, "LEFT")) return 6;   if (!strcmp(n, "RIGHT")) return 7;
+    if (!strcmp(n, "A")) return 8;      if (!strcmp(n, "X")) return 9;
+    if (!strcmp(n, "L")) return 10;     if (!strcmp(n, "R")) return 11;
+    return -1;
+}
+
+#define REF_SCRIPT_MAX 64
+#define REF_SCRIPT_HOLD 4
+static struct { int frame; int btn; } g_script[REF_SCRIPT_MAX];
+static int g_script_n = 0;
+
+static void ref_parse_script(void) {
+    const char *s = getenv("SMK_REF_SCRIPT");
+    if (!s) return;
+    char buf[1024];
+    strncpy(buf, s, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *tok = strtok(buf, ",");
+    while (tok && g_script_n < REF_SCRIPT_MAX) {
+        char name[32]; int frame;
+        if (sscanf(tok, "%d:%31s", &frame, name) == 2) {
+            int b = ref_button_index(name);
+            if (b >= 0) {
+                g_script[g_script_n].frame = frame;
+                g_script[g_script_n].btn = b;
+                g_script_n++;
+                printf("native: scripted input frame %d -> %s\n", frame, name);
+            }
+        }
+        tok = strtok(NULL, ",");
+    }
+}
+
+/* Apply scripted input for this frame: OR all active windows per button, then
+ * push to player 1. Mirrors snesrecomp's apply_script. */
+static void ref_apply_script(Snes *snes, int frame) {
+    int held[12] = {0};
+    for (int i = 0; i < g_script_n; i++)
+        if (frame >= g_script[i].frame && frame < g_script[i].frame + REF_SCRIPT_HOLD)
+            held[g_script[i].btn] = 1;
+    for (int b = 0; b < 12; b++)
+        snes_setButtonState(snes, 1, b, held[b] ? true : false);
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         printf("Usage: %s <rom.sfc> <out_prefix> [max_frames] [dump_frame]\n", argv[0]);
+        printf("  env SMK_REF_EVERY=N    periodic snapshot+bmp every N frames\n");
+        printf("  env SMK_REF_SCRIPT=\"frame:BTN,...\"  scripted input (START,B,...)\n");
         return 1;
     }
     const char *rom_path = argv[1];
     const char *prefix = argv[2];
     int max_frames = (argc >= 4) ? atoi(argv[3]) : 2200;
     int dump_frame = (argc >= 5) ? atoi(argv[4]) : 0; /* 0 = auto first mode7 */
+    int dump_every = 0;
+    { const char *e = getenv("SMK_REF_EVERY"); if (e && atoi(e) > 0) dump_every = atoi(e); }
 
     FILE *f = fopen(rom_path, "rb");
     if (!f) { printf("Can't open %s\n", rom_path); return 1; }
@@ -97,17 +151,30 @@ int main(int argc, char **argv) {
     printf("native LakeSnes: ROM loaded (%ld bytes). max_frames=%d dump_frame=%s\n",
            rom_size, max_frames, dump_frame ? "fixed" : "auto-mode7");
 
+    ref_parse_script();
+
     int captured = 0;
+    uint16_t last_state = 0xFFFF;
     for (int i = 1; i <= max_frames; i++) {
+        if (g_script_n) ref_apply_script(snes, i);
         snes_runFrame(snes);
         int mode = snes->ppu->mode;
+        uint16_t state = snes->ram[0x36] | (snes->ram[0x37] << 8);
+        uint16_t sub   = snes->ram[0x32] | (snes->ram[0x33] << 8);
+        if (state != last_state) {
+            printf("  [f%04d] STATE $36=%04X $32=%04X mode=%d bright=%d\n",
+                   i, state, sub, mode, snes->ppu->brightness);
+            last_state = state;
+        }
         if (i % 120 == 0)
-            printf("  frame %4d: mode=%d brightness=%d\n", i, mode, snes->ppu->brightness);
+            printf("  frame %4d: mode=%d brightness=%d $36=%04X\n",
+                   i, mode, snes->ppu->brightness, state);
 
+        int periodic = dump_every && (i % dump_every == 0);
         int do_dump = dump_frame ? (i == dump_frame)
-                                 : (!captured && mode == 7 &&
+                                 : (!captured && !dump_every && mode == 7 &&
                                     snes->ppu->brightness >= 8 && i > 600);
-        if (do_dump) {
+        if (do_dump || periodic) {
             captured = 1;
             char path[600];
             snes_setPixels(snes, pixels);
@@ -115,9 +182,10 @@ int main(int argc, char **argv) {
             write_snapshot(snes, path);
             snprintf(path, sizeof(path), "%s_f%06d.bmp", prefix, i);
             write_bmp(pixels, path);
-            printf("native LakeSnes: captured frame %d (mode=%d) -> %s_f%06d.{bin,bmp}\n",
-                   i, mode, prefix, i);
-            if (dump_frame) break;
+            if (!periodic)
+                printf("native LakeSnes: captured frame %d (mode=%d) -> %s_f%06d.{bin,bmp}\n",
+                       i, mode, prefix, i);
+            if (do_dump && dump_frame) break;
         }
     }
     if (!captured) printf("native LakeSnes: never reached a Mode-7 frame.\n");
