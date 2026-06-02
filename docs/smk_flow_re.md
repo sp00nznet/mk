@@ -4,6 +4,29 @@ _Goal: recreate SMK's authentic screen flow, not the recomp's simplified one.
 Method: drive the native ROM in LakeSnes (`tools/lakesnes_ref`, now with input
 scripting + WRAM tracing) and trace the live state machine._
 
+## ⭐ CORRECTION (2026-06-02) — menu entry WORKS; `$0E68` was a red herring
+
+Confirmed against **snes9x** (independent emu, HLE DSP-1, no firmware): real SMK
+enters the menu with **SELECT+START** at the title — plain Start does nothing
+(matches the Select-gated handler at `$80:8559`). Then **reproduced headlessly in
+our own LakeSnes harness**:
+
+- A single Start (or single Select+Start) does nothing, but pressing **Select+
+  Start a few times across the title** (e.g. bursts at f400/460/520/600/700)
+  enters the menu: `$32=$0006` → `$36=$0006` (the **1-player driver select** —
+  kart-machine with Mario/Peach/Bowser/Luigi portraits, "1P" badge).
+- **`$0E68` stayed `0000` the whole time** — it was never the gate. The earlier
+  "gate never opens" conclusion (above, kept for history) was WRONG; the real
+  blocker was just input timing/sequence. LakeSnes has no bug here.
+- So the recomp/harness CAN drive the authentic flow; no external emu needed.
+
+**Open:** advancing FROM driver-select (`$36=$06`) isn't working yet — the screen
+renders (brightness 15) but doesn't respond to A/B/Y/X/Start/Select+Start/dpad in
+my tests (only ~4 VRAM words change on dpad). The `$06` per-frame logic is
+`$85:90B1`. Next: trace what sets `$32` from `$06` (or whether the marquee/intro
+must finish first), then map driver→class/cup→race. Tooling: `lakesnes_ref`
+`SMK_REF_SCRIPT` + `SMK_WATCH_WRAM`.
+
 ## Authentic attract flow (native, no input) — mapped
 | frames | `$36` | screen |
 |--------|-------|--------|
