@@ -152,11 +152,20 @@ int main(int argc, char **argv) {
            rom_size, max_frames, dump_frame ? "fixed" : "auto-mode7");
 
     ref_parse_script();
+    /* SMK_REF_POKE="off:val:fromframe" — force a WRAM word each frame (debug,
+     * e.g. open the title input gate: SMK_REF_POKE="E68:0001:250"). */
+    int poke_off = -1, poke_val = 0, poke_from = 0;
+    { const char *p = getenv("SMK_REF_POKE");
+      if (p) sscanf(p, "%x:%x:%d", &poke_off, &poke_val, &poke_from); }
 
     int captured = 0;
     uint16_t last_state = 0xFFFF;
     for (int i = 1; i <= max_frames; i++) {
         if (g_script_n) ref_apply_script(snes, i);
+        if (poke_off >= 0 && i >= poke_from) {
+            snes->ram[poke_off] = poke_val & 0xFF;
+            snes->ram[poke_off + 1] = (poke_val >> 8) & 0xFF;
+        }
         snes_runFrame(snes);
         int mode = snes->ppu->mode;
         uint16_t state = snes->ram[0x36] | (snes->ram[0x37] << 8);
