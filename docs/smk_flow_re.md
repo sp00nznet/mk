@@ -30,12 +30,23 @@ our own LakeSnes harness**:
   ONE `STA $0032` (the title→`$06` entry at `$85:85F3`), so advancing between
   driver/class/cup does NOT change `$36`/`$32`; it's a sub-state inside `$06`,
   changing `$36`/`$32` only at the end (→ race `$02`).
-- **Open:** the CONFIRM input that advances the sub-state. Tried
-  A/B/Y/X/Start/Select+Start/L/R/dpad — cursor moves but no sub-state advance
-  detected. The input→action translation is `$85:8640-86E0` (raw pad → `$80`
-  action codes `$10/$12/$13/$15…`, plus a `$85 & $01` button check). NEXT:
-  finish decoding `$85:8640+` to find which action = "confirm" and the raw input
-  that produces it; or dump-diff WRAM across a confirm to find the sub-state var.
+- **CONFIRM input found = B (or Start).** Per-button WRAM dump-diff at driver
+  select: LEFT/RIGHT = scroll (move cursor `$007E`, ~5-6 byte changes);
+  **B and Start each cause ~47 WRAM changes** (a select/preview: Mario dons his
+  racing helmet, sprite block `$0370+`, anim counter `$0070` cycles `$64→$9C`
+  via `$85:815D`/`$88CE`); A/X/Y/L/R/Select/Up/Down do nothing. So input the menu
+  reacts to is **LEFT/RIGHT (scroll) + B/Start (select)** — matches the disasm
+  (`$85:8640+` translates pad → `$80` action codes; action `$10` → `STZ $7D;
+  JSR $8865` is the select).
+- **Open:** the select **doesn't complete the advance** to cup/class. B/Start
+  starts the helmet/`$0070` animation but it **reverts** (Mario back to normal by
+  ~f2200) and `$0150` (RaceCup) is never set across every pattern tried (single
+  B, double B, RIGHT→B→B, Start×2). So driver-select→cup needs a specific
+  completion sequence (cursor must land on a driver with the marquee showing its
+  NAME, not the "CHOOSE YOUR DRIVER" prompt? a hold? a 2nd confirm after the kart
+  drives in?). NEXT: decode the `$80==$10` select path (`$85:8865`) and what gates
+  the cup advance; or trace what writes `$0150`/the sub-state when a driver is
+  truly locked in. Screenshot of the select (helmet) is the milestone.
 
 Tooling: `lakesnes_ref` `SMK_REF_SCRIPT` (input) + `SMK_WATCH_WRAM` (writes w/ PC).
 Entry recipe: SELECT+START bursts at f400/460/520/600/700 → driver select.
