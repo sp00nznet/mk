@@ -44,7 +44,24 @@ fix already interprets). Key mechanism (via `SMK_WATCH_WRAM` traces + disasm):
 **So: to move to any screen, code sets `$32 = <mode>` and starts a fade-out;
 when the fade completes (`$0160=$8000`) the sequencer enters it.**
 
-## The open blocker — title → menu input trigger
+## Title → menu trigger — FOUND (the input action)
+Disassembling the title input handler `$80:853D` (called by state-`$04` main
+`$80:80BA`): when input is enabled it reads controller `$22` (`$20,X`) and on
+**START (`BIT #$1000`) branches to `$85B9: LDA #$0014` → `$85D8: STA $32`** — i.e.
+**START sets `$32 = $14` (mode select)** and initiates a fade-out (`$48=$8F00`,
+`$015E=$60`). The demo-timeout path shares the same `STA $32` with `A=$02`. So:
+
+> **Title + START → `$32=$14` + fade → sequencer enters mode `$14` (mode select).**
+
+Mode `$14` init = `$E34F` (from the `$E049` table). This matches the recomp's
+`$14`=mode-select — so the recomp's *target* states are right; what's fake is the
+*navigation/transitions* between them.
+
+Forcing it (poke `$32=$14`+`$48=$8F00`+`$015E=$60` at the title) makes the
+sequencer fire but it lands at `$36=$00` with a garbage screen — the mode-`$14`
+init needs the full title-handler setup, so a blind poke can't substitute.
+
+## The open blocker — the title input GATE `$0E68`
 The title input handler `$80:853D` reads the controller (`$20,X`) only when the
 gate **`$0E68 != 0`**. But:
 - `$0E68` is written **exactly once** in the whole ROM — a single `STZ` (clear) at

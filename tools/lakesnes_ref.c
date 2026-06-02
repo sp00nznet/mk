@@ -152,19 +152,29 @@ int main(int argc, char **argv) {
            rom_size, max_frames, dump_frame ? "fixed" : "auto-mode7");
 
     ref_parse_script();
-    /* SMK_REF_POKE="off:val:fromframe" — force a WRAM word each frame (debug,
-     * e.g. open the title input gate: SMK_REF_POKE="E68:0001:250"). */
-    int poke_off = -1, poke_val = 0, poke_from = 0;
+    /* SMK_REF_POKE="off:val:fromframe,off:val:fromframe,..." — force WRAM words
+     * each frame (debug). e.g. enter mode select: "32:0014:400,160:8000:400". */
+    int pk_off[8], pk_val[8], pk_from[8], pk_n = 0;
     { const char *p = getenv("SMK_REF_POKE");
-      if (p) sscanf(p, "%x:%x:%d", &poke_off, &poke_val, &poke_from); }
+      if (p) { char b[256]; strncpy(b, p, 255); b[255] = 0;
+        char *t = strtok(b, ",");
+        while (t && pk_n < 8) {
+          if (sscanf(t, "%x:%x:%d", &pk_off[pk_n], &pk_val[pk_n], &pk_from[pk_n]) == 3) {
+            printf("native: poke $%05X=%04X from f%d\n", pk_off[pk_n], pk_val[pk_n], pk_from[pk_n]);
+            pk_n++;
+          }
+          t = strtok(NULL, ",");
+        } } }
 
     int captured = 0;
     uint16_t last_state = 0xFFFF;
     for (int i = 1; i <= max_frames; i++) {
         if (g_script_n) ref_apply_script(snes, i);
-        if (poke_off >= 0 && i >= poke_from) {
-            snes->ram[poke_off] = poke_val & 0xFF;
-            snes->ram[poke_off + 1] = (poke_val >> 8) & 0xFF;
+        /* one-shot: apply only on the exact frame (from), so the game then runs
+         * naturally (use a negative frame as "every frame" if ever needed). */
+        for (int k = 0; k < pk_n; k++) if (i == pk_from[k]) {
+            snes->ram[pk_off[k]] = pk_val[k] & 0xFF;
+            snes->ram[pk_off[k] + 1] = (pk_val[k] >> 8) & 0xFF;
         }
         snes_runFrame(snes);
         int mode = snes->ppu->mode;
