@@ -20,12 +20,25 @@ our own LakeSnes harness**:
   blocker was just input timing/sequence. LakeSnes has no bug here.
 - So the recomp/harness CAN drive the authentic flow; no external emu needed.
 
-**Open:** advancing FROM driver-select (`$36=$06`) isn't working yet — the screen
-renders (brightness 15) but doesn't respond to A/B/Y/X/Start/Select+Start/dpad in
-my tests (only ~4 VRAM words change on dpad). The `$06` per-frame logic is
-`$85:90B1`. Next: trace what sets `$32` from `$06` (or whether the marquee/intro
-must finish first), then map driver→class/cup→race. Tooling: `lakesnes_ref`
-`SMK_REF_SCRIPT` + `SMK_WATCH_WRAM`.
+### Driver select (`$36=$06`) — fully functional; confirm not yet found
+- The screen IS working: marquee scrolls **"CHOOSE YOUR DRIVER"**, and the
+  **cursor responds to input** — `$81` (cursor index) moves 0→1→2→3→4 via
+  `$85:8618` (inc) / `$85:8624` (dec), driven by a processed menu-input byte
+  `$80` (action codes, set around `$85:867B`/`$8687`/`$8272`). So input reaches
+  the menu logic; the "unresponsive" read earlier was just the small cursor delta.
+- **driver→class→cup are INTERNAL sub-states of mode `$06`** — bank `$85` has only
+  ONE `STA $0032` (the title→`$06` entry at `$85:85F3`), so advancing between
+  driver/class/cup does NOT change `$36`/`$32`; it's a sub-state inside `$06`,
+  changing `$36`/`$32` only at the end (→ race `$02`).
+- **Open:** the CONFIRM input that advances the sub-state. Tried
+  A/B/Y/X/Start/Select+Start/L/R/dpad — cursor moves but no sub-state advance
+  detected. The input→action translation is `$85:8640-86E0` (raw pad → `$80`
+  action codes `$10/$12/$13/$15…`, plus a `$85 & $01` button check). NEXT:
+  finish decoding `$85:8640+` to find which action = "confirm" and the raw input
+  that produces it; or dump-diff WRAM across a confirm to find the sub-state var.
+
+Tooling: `lakesnes_ref` `SMK_REF_SCRIPT` (input) + `SMK_WATCH_WRAM` (writes w/ PC).
+Entry recipe: SELECT+START bursts at f400/460/520/600/700 → driver select.
 
 ## Authentic attract flow (native, no input) — mapped
 | frames | `$36` | screen |
