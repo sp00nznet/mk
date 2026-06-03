@@ -4,7 +4,32 @@ _Goal: recreate SMK's authentic screen flow, not the recomp's simplified one.
 Method: drive the native ROM in LakeSnes (`tools/lakesnes_ref`, now with input
 scripting + WRAM tracing) and trace the live state machine._
 
-## ⭐ CORRECTION (2026-06-02) — menu entry WORKS; `$0E68` was a red herring
+## ⭐⭐ AUTHENTIC FLOW (from snes9x, user-verified 2026-06-02)
+
+Real SMK 1-player sequence (observed in snes9x):
+```
+title --(START+SELECT)--> # of players --> MarioKart GP / Time Trial
+   --> 50/100cc class --> "is this OK?" settings confirm --> character select
+   --> "char sel OK?" confirm --> Mushroom/Flower/Star cup --> RACE
+```
+All of these appear to be **sub-states of mode `$36=$06`** (bank `$85` has only one
+`STA $0032` — the title→`$06` entry; advancing screens does NOT change `$36`).
+
+**Replication status in LakeSnes (our harness):**
+- Entry works but is finicky: a single START+SELECT does nothing; needs several
+  bursts across the title (f400-700) to enter `$06`. (snes9x enters on one press
+  — a LakeSnes input-timing/title-state divergence.)
+- At `$06` the screen is functional (cursor scrolls via LEFT/RIGHT, B selects —
+  helmet sticks) but the **sub-state never advances** to the next screen (mode/
+  class/etc.); `$0150` (cup) is never reached.
+- ⇒ The bug to chase: why LakeSnes' `$06` sub-state machine doesn't advance like
+  snes9x (input timing in `lakesnes_ref`, or a frame-model issue, or the `$06`
+  sub-state dispatch in `$85:90B1`). The `$06` screen is likely **# of players**
+  (first sub-state), not character-select.
+
+---
+
+## CORRECTION (2026-06-02) — menu entry WORKS; `$0E68` was a red herring
 
 Confirmed against **snes9x** (independent emu, HLE DSP-1, no firmware): real SMK
 enters the menu with **SELECT+START** at the title — plain Start does nothing
