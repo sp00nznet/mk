@@ -31,6 +31,21 @@ All of these appear to be **sub-states of mode `$36=$06`** (bank `$85` has only 
   dispatch to find the advance condition; OR capture the snes9x menu run (sub-
   state values + which input advances each screen) and diff against LakeSnes.
 
+**Sub-state trace (2026-06-02):** the `$06` dispatch (`$85:92F9`/`$935B`) gates on
+`$48`(fade)/`$0161`(brightness)/`$0198`/`$0E66`/`$2C`/`$2E`. `$2C`/`$2E` are set
+by input in the title→`$06` entry code (`$85:85C0+`: STZ/`#$02`/`#$04` → `$2C`;
+`#$02`/`#$04` → `$2E`) and checked (`$2C==4 && $2E==2`). BUT at the reached
+screen `$2C=$2E=$00`, and **poking `$2C`/`$2E` to (4,2)/(2,2)/(0,4)/(2,4) does NOT
+change the screen** — it stays the same kart-machine. So `$2C`/`$2E` are
+sub-selections (player count / mode), not the screen selector. The menu is likely
+**one machine screen whose marquee prompt + portraits cycle** through
+#players→mode→class→character (not distinct full screens), which is why VRAM only
+showed ONE transition (title→machine) and inputs cause only small (~220-word)
+deltas. The navigation/advance condition remains uncracked; the finicky
+multi-press entry compounds it. Best next move: **observe the snes9x run's marquee
+text + `$2C`/`$2E`/`$0150` progression** to learn the exact per-prompt input,
+since black-box driving in LakeSnes keeps landing in ambiguous states.
+
 **Replication status in LakeSnes (our harness):**
 - Entry works but is finicky: a single START+SELECT does nothing; needs several
   bursts across the title (f400-700) to enter `$06`. (snes9x enters on one press
