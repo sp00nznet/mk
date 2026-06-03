@@ -4,16 +4,51 @@ _Goal: recreate SMK's authentic screen flow, not the recomp's simplified one.
 Method: drive the native ROM in LakeSnes (`tools/lakesnes_ref`, now with input
 scripting + WRAM tracing) and trace the live state machine._
 
-## ⭐⭐ AUTHENTIC FLOW (from snes9x, user-verified 2026-06-02)
+## ⭐⭐⭐ CRACKED — full flow driven headlessly (2026-06-03)
+
+Solved with a **headless BizHawk + snes9x core** harness (`tools/bizhawk/`,
+`--chromeless --lua`, HLE DSP-1, no firmware). Tapping a single button walks a
+cold boot all the way into a live Mode-7 race — observed AND reproduced:
+
+| `$36` | Screen | Advance | Reference |
+|-------|--------|---------|-----------|
+| `$04` | Title (Super Mario Kart) | `Start+Y` (after fade-in) | `docs/flow/flow_04_title.png` |
+| `$06` | Driver select (kart machine, 1P/2P) | `Start+Y` | `docs/flow/flow_06_driver.png` |
+| `$08` | 50cc Class / Mushroom·Flower·Star Cup | `Start+Y` | `docs/flow/flow_08_class_cup.png` |
+| `$02` | **Race** (Mode-7 Mario Circuit, "ROUND 1") | — | `docs/flow/flow_02_race.png` |
+
+**Two facts that unblocked everything (both prior assumptions were wrong):**
+1. **The confirm button is `Start+Y`, not `Select+Start`.** snes9x's default keyboard
+   maps **Space → Y**, so the user's "start + space" was always **Start+Y**. Every
+   Select+Start attempt (LakeSnes and BizHawk) correctly *reached* the game
+   (`$0020=$3000`) but the title simply doesn't act on it.
+2. **The title has an input gate that opens only after it fully fades in**
+   (`$0160` reaches `$0F00`, ~frame 360). Presses during the fade are ignored —
+   which is why isolated early presses failed while later/repeated taps worked.
+
+So `$06`, `$08`, `$02` are **separate modes** (the master sequencer at `$81:E000`
+sets `$32`=pending then copies `$32`→`$36`), NOT sub-states of `$06`. The
+`# players → GP/TimeTrial` choices are defaulted/auto-accepted by the rapid
+`Start+Y` taps. The empirical `$32` sequence per run: `$04→$06→$08→$02`.
+
+Recipe (see `tools/bizhawk/flow_driver.lua`): tap `Start+Y` in ~6-frame pulses
+every ~70 frames once `frame ≥ 360`. Reaches `$36=$02` (race) by ~frame 1045–1255.
+
+> NEXT for the recomp: replay this exact `Start+Y` input timing in our LakeSnes
+> harness / recompiled build and diff against the snes9x ground truth.
+
+---
+### Superseded hypothesis (kept for history)
+
+_Earlier (2026-06-02) I believed the menu screens were all **sub-states of `$36=$06`**
+and that input handling was the blocker. Both were wrong — see above. The real
+issue was the button (Start+Y) + the title fade-in gate. Original notes follow._
 
 Real SMK 1-player sequence (observed in snes9x):
 ```
-title --(START+SELECT)--> # of players --> MarioKart GP / Time Trial
-   --> 50/100cc class --> "is this OK?" settings confirm --> character select
-   --> "char sel OK?" confirm --> Mushroom/Flower/Star cup --> RACE
+title --(START+Y)--> driver select --> 50cc class / cup select --> RACE
+   (# players / GP-vs-TimeTrial accepted as defaults via repeated Start+Y)
 ```
-All of these appear to be **sub-states of mode `$36=$06`** (bank `$85` has only one
-`STA $0032` — the title→`$06` entry; advancing screens does NOT change `$36`).
 
 **Input-timing investigation (2026-06-02) — RULED OUT as the cause:**
 - `snes_runFrame` reads the controller via `snes_doAutoJoypad` at vblank start
