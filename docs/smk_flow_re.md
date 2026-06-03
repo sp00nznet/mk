@@ -15,6 +15,22 @@ title --(START+SELECT)--> # of players --> MarioKart GP / Time Trial
 All of these appear to be **sub-states of mode `$36=$06`** (bank `$85` has only one
 `STA $0032` — the title→`$06` entry; advancing screens does NOT change `$36`).
 
+**Input-timing investigation (2026-06-02) — RULED OUT as the cause:**
+- `snes_runFrame` reads the controller via `snes_doAutoJoypad` at vblank start
+  (snes.c:188-191) then fires NMI — a normal ~1-2 frame input latency, identical
+  to real hardware / snes9x. Not a bug.
+- `snes_setButtonState` (snes_other.c:137) sets `input1->currentState`; auto-joypad
+  latches+reads it. Input reaches the game correctly — **proven**: at `$06` the
+  cursor scrolls on LEFT/RIGHT and B "selects" (Mario's helmet). So input is NOT
+  dropped.
+- Yet NO input (B / Start / Select+Start / multi-press sweeps of each) advances
+  the `$06` sub-state to the next screen. ⇒ The blocker is the **menu state
+  machine**, not input timing. Either a real LakeSnes-vs-snes9x accuracy
+  divergence on this menu, or a specific input sequence/condition not yet found.
+- NEXT (different tack): trace the `$06` sub-state variable + the `$85:90B1`
+  dispatch to find the advance condition; OR capture the snes9x menu run (sub-
+  state values + which input advances each screen) and diff against LakeSnes.
+
 **Replication status in LakeSnes (our harness):**
 - Entry works but is finicky: a single START+SELECT does nothing; needs several
   bursts across the title (f400-700) to enter `$06`. (snes9x enters on one press
