@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
-project(SuperMarioKartRecomp C)
+project(SuperMarioKartRecomp C CXX)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # SDL2
 find_package(SDL2 REQUIRED)
@@ -29,6 +31,9 @@ target_link_libraries(smk_launcher PRIVATE
     snesrecomp
     SDL2::SDL2main
 )
+# snesrecomp now pulls in C++ (ImGui menu) — link the executable as C++ so the
+# C++ runtime is included.
+set_target_properties(smk_launcher PROPERTIES LINKER_LANGUAGE CXX)
 
 # --- oam_dumper (debug tool: runs original ROM in LakeSnes, dumps OAM) ---
 add_executable(oam_dumper tools/oam_dumper.c)

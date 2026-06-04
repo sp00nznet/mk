@@ -77,6 +77,8 @@ Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus
 
 ## Controls
 
+Default Player 1 keyboard (rebindable in the menu):
+
 | Key | SNES Button |
 |-----|-------------|
 | Arrow keys | D-pad |
@@ -89,6 +91,24 @@ Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus
 | Enter | Start |
 | Right Shift | Select |
 | Escape | Quit |
+
+**Gamepads** (Xbox-style, via SDL_GameController) work out of the box for both
+players — A→B, B→A, X→Y, Y→X, shoulders→L/R, Back→Select, Start→Start, d-pad and
+left stick steer.
+
+## Menu
+
+A Dear ImGui menu bar (modelled on [LinksAwakening](https://github.com/sp00nznet/LinksAwakening))
+overlays the game:
+
+- **File** — New / Save / Load config (`smk_config.ini`), Quit
+- **Graphics** — window scale, V-Sync, texture filter, scanlines, show FPS
+- **Sound** — master volume, mute
+- **Controller** — rebind keyboard **and** gamepad for **Player 1 and Player 2**
+- **Multiplayer** — placeholder (long-term stretch goal)
+- **Help → About** — links back to this repository
+
+The menu auto-disables in headless/scripted runs (`SMK_HEADLESS`/`SMK_SCRIPT`).
 
 ## Building
 
