@@ -139,10 +139,21 @@ int main(int argc, char *argv[]) {
         printf("smk: interpreter force mode = %s\n", force ? "ON" : "OFF");
     }
 
-    /* === Run the boot chain === */
-    printf("--- Running boot chain ---\n");
-    smk_80FF70();
-    printf("--- Boot chain done ---\n\n");
+    /* Real-frame mode: bypass the recompiled boot chain + per-frame shells and
+     * run the genuine ROM via LakeSnes's full cycle-accurate frame (like
+     * tools/lakesnes_ref). Renders everything the shells can't yet drive — in
+     * particular the Mode-7 race, whose multi-frame init/fade-in the shells drop.
+     * SMK_REALFRAME=1. The CPU boots from the reset vector on the first frame. */
+    bool realframe = getenv("SMK_REALFRAME") != NULL;
+
+    /* === Run the boot chain (shell mode only) === */
+    if (!realframe) {
+        printf("--- Running boot chain ---\n");
+        smk_80FF70();
+        printf("--- Boot chain done ---\n\n");
+    } else {
+        printf("smk: REAL-FRAME mode (full LakeSnes execution; recomp shells bypassed)\n");
+    }
 
     printf("Running... (press Escape to quit)\n\n");
 
@@ -164,47 +175,51 @@ int main(int argc, char *argv[]) {
     int frame_no = 0;
 
     /* === Main frame loop === */
-    while (snesrecomp_begin_frame()) {
-        /* Apply scripted input (after begin_frame's keyboard read) */
+    while (realframe ? snesrecomp_realframe_begin() : snesrecomp_begin_frame()) {
+        /* Apply scripted input (after the input read; overrides keyboard). */
         apply_script(frame_no);
 
-        /* Hybrid: navigate menus with recompiled handlers, then latch into
-         * force-interpret once a target state is reached so the genuine ROM
-         * drives gameplay. SMK_FORCE_FROM_STATE=<hex $36 value>. */
-        {
-            const char *ffs = getenv("SMK_FORCE_FROM_STATE");
-            if (ffs) {
-                static int latched = 0;
-                if (!latched && bus_wram_read16(0x36) == (uint16_t)strtol(ffs, NULL, 16)) {
-                    latched = 1;
-                    recomp_interp_set_force(true);
-                    printf("smk: force-interpret latched at state $%s (frame %d)\n",
-                           ffs, frame_no);
+        if (realframe) {
+            /* Full cycle-accurate frame on the LakeSnes CPU (CPU + NMI + HDMA +
+             * PPU). No recompiled shells. */
+            snesrecomp_realframe_end();
+        } else {
+            /* Hybrid: navigate menus with recompiled handlers, then latch into
+             * force-interpret once a target state is reached so the genuine ROM
+             * drives gameplay. SMK_FORCE_FROM_STATE=<hex $36 value>. */
+            {
+                const char *ffs = getenv("SMK_FORCE_FROM_STATE");
+                if (ffs) {
+                    static int latched = 0;
+                    if (!latched && bus_wram_read16(0x36) == (uint16_t)strtol(ffs, NULL, 16)) {
+                        latched = 1;
+                        recomp_interp_set_force(true);
+                        printf("smk: force-interpret latched at state $%s (frame %d)\n",
+                               ffs, frame_no);
+                    }
                 }
             }
+
+            /* Clear NMI flag before NMI handler — the handler itself sets $44
+             * (smk_808237 sets $44=$FFFF, smk_8081DD sets $44=1).
+             * If we pre-set $44=1, state $04's BNE check exits early. */
+            bus_wram_write16(g_cpu.DP + 0x44, 0);
+
+            if (getenv("SMK_DMASETUP_DEBUG"))
+                fprintf(stderr, "==== frame %d : NMI (smk_808000) ====\n", frame_no);
+
+            /* Run NMI handler (DMA, brightness, NMI state dispatch) */
+            smk_808000();
+
+            if (getenv("SMK_DMASETUP_DEBUG"))
+                fprintf(stderr, "==== frame %d : MAIN (smk_808056) ====\n", frame_no);
+
+            /* Run one main loop iteration (frame setup + state handler) */
+            smk_808056();
+
+            /* Render PPU and present */
+            snesrecomp_end_frame();
         }
-
-        /* Clear NMI flag before NMI handler — the handler itself sets $44
-         * (smk_808237 sets $44=$FFFF, smk_8081DD sets $44=1).
-         * If we pre-set $44=1, state $04's BNE check exits early. */
-        bus_wram_write16(g_cpu.DP + 0x44, 0);
-
-        /* Phase markers for DMA-setup tracing (correlate DMAs to NMI vs main
-         * and to frame boundaries). */
-        if (getenv("SMK_DMASETUP_DEBUG"))
-            fprintf(stderr, "==== frame %d : NMI (smk_808000) ====\n", frame_no);
-
-        /* Run NMI handler (DMA, brightness, NMI state dispatch) */
-        smk_808000();
-
-        if (getenv("SMK_DMASETUP_DEBUG"))
-            fprintf(stderr, "==== frame %d : MAIN (smk_808056) ====\n", frame_no);
-
-        /* Run one main loop iteration (frame setup + state handler) */
-        smk_808056();
-
-        /* Render PPU and present */
-        snesrecomp_end_frame();
 
         frame_no++;
 

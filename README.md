@@ -143,6 +143,16 @@ build/Debug/smk_launcher.exe
 
 The ROM file is not included — supply your own US v1.0 copy (MD5: `7f25ce5a283d902694c52fb1152fa61a`).
 
+**Playing the full game (including races):** the recompiled per-frame shells can't yet
+drive the Mode-7 race's multi-frame setup, so to play through a race set
+`SMK_REALFRAME=1` — this runs the genuine ROM via LakeSnes's full cycle-accurate frame
+(menus *and* the Mode-7 race render and play). The default (no flag) uses the
+recompiled-shell path for recompilation development.
+
+```bash
+SMK_REALFRAME=1 build/Debug/smk_launcher.exe        # full playable game
+```
+
 ## Decompressor
 
 The custom decompressor at `$84:E09E` handles SMK's tile/tilemap compression format:

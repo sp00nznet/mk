@@ -164,6 +164,25 @@ HDMA is ALREADY implemented in `snesrecomp_end_frame` (`dma_hdmaRunLine` per lin
   to completion (e.g. interpret the genuine brightness/transition path through real frames,
   not the collapsed shells). Not a small targeted patch — scoped for a dedicated pass.
 
+### ✅ RESOLVED — real-frame mode (2026-06-04)
+
+Rather than re-architect the shells to complete the multi-frame race init, the
+launcher gained a **real-frame mode** (`SMK_REALFRAME=1`): it bypasses the recomp
+boot chain + per-frame shells and runs the genuine ROM via LakeSnes's full
+cycle-accurate frame — `snesrecomp_realframe_begin()/end()` wrapping
+`snes_runFrame()`, exactly how `tools/lakesnes_ref` renders. Verified end-to-end:
+the launcher walks `$04→$06→$08→$02` from controller input and **renders the Mode-7
+race** (`docs/flow/recomp_race_realframe.png` — perspective track, karts, HUD), where the shell path
+stayed `mode=1`/forced-blank. The brightness handler `smk_80B181` was confirmed a
+faithful port of the genuine `$80:B181` (fade-in/out logic identical line-for-line),
+so the blank race was purely the shells dropping the init's vblank waits — which
+real-frame avoids by running real continuous execution.
+
+This is the practical fix for a playable game now (gameplay isn't recompiled yet, so
+real continuous execution is appropriate). The recompiled **shell path remains the
+default** for incremental recompilation work; as gameplay functions get recompiled,
+the shells improve and real-frame becomes unnecessary. `SMK_REALFRAME=1` to play.
+
 ---
 ### Superseded hypothesis (kept for history)
 
