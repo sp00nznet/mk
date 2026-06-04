@@ -6,9 +6,18 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 ## Status
 
-**48 recompiled functions** — game boots through the title screen with full rendering, accepts joypad input, and transitions through the mode select and character select screens. DSP-1 coprocessor fully emulated via LakeSnes HLE backend.
+**Playable end-to-end.** A cold boot walks the authentic flow from controller input —
+title → driver select → 50cc class / cup select → a live **Mode-7 race** — with a Dear
+ImGui menu bar, save-states, configurable keyboard + gamepad controls for two players, and
+**lockstep netplay**. The SNES hardware (PPU Modes 0–7, SPC700 + DSP audio, DMA/HDMA, DSP-1
+coprocessor) is fully emulated by the LakeSnes backend.
 
-All recompiled functions are defined with `RECOMP_PATCH(name, snes_addr) { ... }` and auto-register in snesrecomp's dispatch table at static-init time — adding a new translated function is a one-line change at the definition site, no central list to maintain.
+Two execution paths share the same backend: **real-frame mode** (the default) runs the
+genuine ROM through LakeSnes's cycle-accurate frame, so the whole game plays today; the
+**recompiled-shell path** (`SMK_SHELLS=1`) runs hand-written `RECOMP_PATCH` functions and is
+where the static-recompilation work grows incrementally. Recompiled functions are defined
+with `RECOMP_PATCH(name, snes_addr) { ... }` and auto-register in snesrecomp's dispatch table
+at static-init time — adding a translated function is a one-line change, no central list.
 
 ![Title Screen](newtitle.png)
 
@@ -18,40 +27,52 @@ The full menu flow runs from controller input — title → driver select → cl
 
 ![Class / Cup Select](class.png)
 
-The Mode-7 race renders too — perspective track, lane markings, scenery, and HUD:
+The Mode-7 race renders and plays — perspective track, karts, HUD, split-screen:
 
-![Mode-7 Race](mode7_race.png)
+![Mode-7 Race](race.png)
+![Mode-7 Race 2](race2.png)
+
+**Lockstep netplay** — two machines run the same deterministic emulation in sync (host =
+Player 1, client = Player 2), starting from a shared save-state:
+
+![Multiplayer netplay](mp.png)
 
 A Dear ImGui menu bar (File / Graphics / Sound / Controller / Multiplayer / Help) overlays the game — see [Menu](#menu).
 
 ### What works
-- Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup → Mode 7 angle table
-- NMI handler with state dispatch, brightness fading, OAM DMA
-- Main loop with state machine (idle → init → title → mode select → character select)
-- Custom tile/tilemap decompressor ($84:E09E) — all 7 compression modes + E0+ extended counts
-- Title screen transition: PPU register setup, VRAM tile/tilemap loading, palette decompression
-- Real palette data loaded from ROM → CGRAM (256 colors)
-- All 3 BG layers rendering correctly (Mode 1: title banner, hills, text)
-- Sprite tile DMA pipeline: per-frame staging buffer → NMI DMA consumer → VRAM
-- 8-slot sprite animation state machine with Y interpolation and phase milestones
-- OAM builder: sprite slots → screen coords → OAM entries with proper tile/attr/priority
-- Joypad input: SDL keyboard → SNES auto-joypad → WRAM with edge detection
-- HDMA channel 1: indirect mode window masking ($2126/$2127)
-- Mode select screen (state $14): graphics decompression, PPU init, simple menu input
-- Mode select OAM offscreen filler ($81:94C2 equivalent) — slots 4-127 pinned to Y=$E0 so leftover title-screen sprites don't bleed onto mode select
-- Character select screen (state $06): PPU Mode 0, tile DMA, palette loading, 8-character grid navigation with D-pad, confirm/cancel, transition trigger
-- SRAM checksum validation and save data erase menu (button-gated, matching original logic)
-- LakeSnes PPU renders all 224 scanlines per frame
-- SDL2 window at 768×672 (3× scale), 60fps vsync, keyboard input
+- **Full authentic flow from controller input** — title → driver select → 50cc class / cup
+  select → Mode-7 race, all driven by the genuine ROM's state sequencer (`$81:E000`)
+- **Mode-7 race** rendering + gameplay: perspective track, karts, HUD, lap timer, split-screen
+- **Dear ImGui menu** overlaying the game — File / Graphics / Sound / Controller / Multiplayer / Help
+- **Save-states** — File → Save/Load (and F5/F8), full machine state via LakeSnes; File → New resets
+- **Configurable input** for **both players** — rebind keyboard *and* Xbox-style gamepad per button
+- **Lockstep netplay** (TCP) with input-delay buffering — host/join, save-state sync on connect,
+  deterministic in-sync emulation (verified by matching WRAM checksums)
+- Full boot chain: reset vector → hardware init → WRAM 0x55 fill → PPU/APU/DSP-1 setup → Mode-7 tables
+- Custom tile/tilemap decompressor (`$84:E09E`) — all 7 compression modes + E0+ extended counts
+- Joypad/auto-joypad input with edge detection; real palettes ROM → CGRAM; per-scanline HDMA
+- LakeSnes renders all PPU scanlines per frame; SDL2 window (3× scale by default), 60 fps, audio
 
 ### What's next
-- Mode select menu text (GP / Match Race / Battle Mode) — open investigation. ROM analysis confirms the state $14 handler only places 4 large (16x16) sprites forming a 64x16 selection frame and sets TM=$10 (OBJ-only), so text source remains unidentified. A scheduled research agent is auditing the Yoshifanatic1 and jvipond disassemblies to narrow the hypothesis space.
-- Character portraits on the character select grid
-- Race screen (Mode 7 rendering, DSP-1 projection math, full gameplay — DSP-1 HLE backend now active)
+- **Grow the recompiled-shell path** (`SMK_SHELLS=1`) to drive gameplay — currently the shells
+  render the menus but the Mode-7 race's multi-frame init/fade-in needs the real frame
+  (the default real-frame path handles it). See `docs/smk_flow_re.md`.
+- Netplay polish: rollback / over-the-wire desync detection; "drop straight into 2-player on connect"
+- More recompiled functions (the long-term goal: replace real-frame with recompiled C)
 
-### Recent (April 2026)
-- **Auto-registered dispatch** via `RECOMP_PATCH(name, snes_addr) { ... }` — replaced central `smk_register_all()` boilerplate with linker-priority static constructors. Pattern inspired by N64Recomp's `RECOMP_PATCH`. See [snesrecomp/recomp_patch.h](https://github.com/sp00nznet/snesrecomp/blob/main/include/snesrecomp/recomp_patch.h).
-- **Public 65816 op kit** — `<snesrecomp/cpu_ops.h>` promoted out of game-private space. Any SNES recomp project linking snesrecomp now has `op_lda_*`, `op_sta_*`, `op_rep`, `op_php`/`op_plp`, … available as inline helpers.
+### Recent (June 2026)
+- **Cracked the menu→race flow** — root-caused the long-standing menu blocker to a power-on
+  WRAM fill (`$2E` game-mode read as 2-player on a zero-filled RAM); fixed with a `0x55` fill
+  matching hardware/snes9x. Full RE writeup in [`docs/smk_flow_re.md`](docs/smk_flow_re.md),
+  cracked headlessly via a BizHawk + snes9x-core harness (`tools/bizhawk/`).
+- **Real-frame mode** — runs the genuine ROM via LakeSnes's full frame so the whole game plays now.
+- **ImGui menu, save-states, 2-player input, and lockstep netplay** added to snesrecomp (generic).
+- **Fixed a real `s_pixel_buf` overflow** (478 vs 480 rows) that silently zeroed adjacent statics.
+
+### Earlier
+- **Auto-registered dispatch** via `RECOMP_PATCH(name, snes_addr) { ... }` — linker-priority static
+  constructors, no central list. Pattern inspired by N64Recomp's `RECOMP_PATCH`.
+- **Public 65816 op kit** — `<snesrecomp/cpu_ops.h>` (`op_lda_*`, `op_sta_*`, `op_rep`, …).
 
 ## Architecture
 
@@ -81,7 +102,12 @@ A Dear ImGui menu bar (File / Graphics / Sound / Controller / Multiplayer / Help
 └─────────────────────────────────────────────────┘
 ```
 
-Recompiled game code acts as the CPU — it calls `bus_read8(bank, addr)` / `bus_write8(bank, addr, val)` which route through LakeSnes's real memory bus to the actual PPU, APU, DMA, and cartridge hardware. The PPU renders scanlines, the APU processes audio, and DMA transfers happen exactly as on real hardware.
+In the **recompiled-shell path** (`SMK_SHELLS=1`), recompiled game code acts as the CPU — it
+calls `bus_read8(bank, addr)` / `bus_write8(bank, addr, val)`, which route through LakeSnes's
+real memory bus to the actual PPU, APU, DMA, and cartridge hardware. In the **default
+real-frame path**, LakeSnes's own CPU executes the genuine ROM each frame (`snes_runFrame`)
+— identical to a cycle-accurate emulator — so the full game plays while the recompiled
+functions are still being written. Either way, all PPU/APU/DMA behaviour is real.
 
 ## Controls
 
@@ -98,22 +124,24 @@ Default Player 1 keyboard (rebindable in the menu):
 | W | R |
 | Enter | Start |
 | Right Shift | Select |
+| F5 / F8 | Save / Load state |
 | Escape | Quit |
 
 **Gamepads** (Xbox-style, via SDL_GameController) work out of the box for both
 players — A→B, B→A, X→Y, Y→X, shoulders→L/R, Back→Select, Start→Start, d-pad and
-left stick steer.
+left stick steer. Rebind any of it in **Controller** (P1/P2 tabs).
 
 ## Menu
 
 A Dear ImGui menu bar (modelled on [LinksAwakening](https://github.com/sp00nznet/LinksAwakening))
 overlays the game:
 
-- **File** — New / Save / Load config (`smk_config.ini`), Quit
+- **File** — New (reset/restart), Save / Load state (`smk_state.sav`; also **F5 / F8**),
+  Settings ▸ (save/load `smk_config.ini`), Quit
 - **Graphics** — window scale, V-Sync, texture filter, scanlines, show FPS
 - **Sound** — master volume, mute
 - **Controller** — rebind keyboard **and** gamepad for **Player 1 and Player 2**
-- **Multiplayer** — placeholder (long-term stretch goal)
+- **Multiplayer** — Host / Join (IP:port), input-delay, connection status — lockstep netplay
 - **Help → About** — links back to this repository
 
 The menu auto-disables in headless/scripted runs (`SMK_HEADLESS`/`SMK_SCRIPT`).
@@ -177,14 +205,18 @@ Commands `$E0`–`$FE` use extended 10-bit counts: 1 data byte + cmd bits 0-1 as
 ├── src/
 │   ├── recomp/        Recompiled game functions (smk_boot.c, smk_init.c, smk_title.c)
 │   └── main/          main.c — entry point, frame loop
-├── ext/snesrecomp/    snesrecomp library:
-│                        recomp_patch.h — RECOMP_PATCH auto-registration macro
-│                        cpu_ops.h      — 65816 instruction helpers (op_lda_*, op_sta_*, …)
-│                        cpu.h, bus.h   — CPU state + memory bus
-│                        LakeSnes backend + SDL2 platform
+├── ext/snesrecomp/    snesrecomp library (LakeSnes backend + SDL2 platform):
+│                        recomp_patch.h    — RECOMP_PATCH auto-registration macro
+│                        cpu_ops.h         — 65816 instruction helpers (op_lda_*, op_sta_*, …)
+│                        menu_overlay.cpp  — Dear ImGui menu (File/Graphics/Sound/Controller/MP/Help)
+│                        mp_session.c      — generic SNES lockstep netplay (TCP)
+│                        third_party/imgui — vendored Dear ImGui
+├── docs/
+│   └── smk_flow_re.md  reverse-engineering of the menu→race flow
 └── tools/
     ├── disasm/        65816 disassembler (M/X flag tracking, all addressing modes)
-    └── mesen/         Mesen2 trace scripts + parsers
+    ├── bizhawk/       headless BizHawk + snes9x-core ground-truth harness
+    └── lakesnes_ref.c native LakeSnes runner (scripted input, snapshot/BMP dumps)
 ```
 
 ## ROM Details

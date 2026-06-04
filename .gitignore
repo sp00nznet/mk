@@ -66,6 +66,9 @@ tools/mesen/*.txt
 !/newtitle.png
 !/charselect.png
 !/class.png
+!/mp.png
+!/race.png
+!/race2.png
 
 # Runtime user config (written by the ImGui menu)
 smk_config.ini
