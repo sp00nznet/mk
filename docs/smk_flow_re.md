@@ -124,13 +124,27 @@ So the **menu→race navigation is fully integrated** into the live recomp, and 
 screens render. (`SMK_INTERP=0`'s simplified `$04→$14→$06` path is now obsolete for this
 flow.)
 
-**Remaining (separate, pre-existing):** at `$36=$02` the launcher's PPU stays
-`forcedBlank=1 brightness=0 mode=1` — the Mode-7 race doesn't set up, where
-`lakesnes_ref` (full `snes_runFrame`) renders it fine. This is the recomp **frame-model
-/ HDMA** gap (the per-frame `smk_808000`+`smk_808056` shells don't reproduce the full
-race setup that real per-scanline HDMA does), the same area the old
-`SMK_FORCE_FROM_STATE=08` + end_frame-HDMA hybrid worked around. Distinct from the menu
-fix; next target for live gameplay rendering.
+**Remaining (separate, pre-existing) — race rendering, localized 2026-06-03:** at
+`$36=$02` the launcher's PPU stays `forcedBlank=1 brightness=0 mode=1`, where
+`lakesnes_ref` (full `snes_runFrame`) renders Mode-7 fine. Diagnosed:
+- The race's **M7 raster init DID run** — `$A4` is set to 6 at PC `81:FB83`
+  (`$81:F7F1→$FB7E`), so the per-scanline M7 HDMA pointers are configured. The gap is
+  **downstream of init**, in the recomp's manual frame model:
+  1. **Per-scanline HDMA** isn't reproduced — the race sets `BGMODE=7` via per-scanline
+     HDMA on `$2105`, but the launcher's *untimed* end_frame HDMA leaves `mode=1`.
+  2. **Brightness fade-in** never happens — the race stays force-blanked (`$2100` bit7,
+     brightness 0); the recompiled NMI brightness shell `smk_80B181` doesn't drive the
+     race fade.
+- Root: the launcher drives frames manually (`smk_808000` NMI + `smk_808056` main +
+  manual PPU render + untimed HDMA in `end_frame`), which doesn't replicate the
+  per-scanline HDMA + brightness behavior that real `snes_runFrame` does. The menus
+  ($04/$06/$08, mode 0/1, no per-scanline tricks) render fine; the Mode-7 race needs the
+  real per-scanline frame.
+- Fix options: (a) make `end_frame` HDMA per-scanline for the race (proper recomp work);
+  (b) in *full* force-interpret mode, drive the frame via `snes_runFrame` like
+  `lakesnes_ref` (gives a fully-playable game now, but bypasses the recompiled shells —
+  a stopgap, not the recomp end-goal). The old `SMK_FORCE_FROM_STATE=08` hybrid rendered
+  it via end_frame-HDMA, so a path exists.
 
 ---
 ### Superseded hypothesis (kept for history)
