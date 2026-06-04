@@ -37,6 +37,44 @@ every ~70 frames once `frame ≥ 360`. Reaches `$36=$02` (race) by ~frame 1045�
 > NEXT for the recomp: replay this exact `Start+Y` input timing in our LakeSnes
 > harness / recompiled build and diff against the snes9x ground truth.
 
+## ⭐ LakeSnes replay + divergence pinned to the `$06` confirm gate (2026-06-03)
+
+Replayed the snes9x Start+Y/Start timing in our own backend via `tools/lakesnes_ref`
+(pure LakeSnes, `SMK_REF_SCRIPT="frame:BTN,..."`, `SMK_WATCH_WRAM=<off>`). Result:
+
+**LakeSnes reproduces the flow up to `$06`, then stalls.** It matches snes9x exactly
+through driver-select entry, then refuses to advance to `$08`:
+
+| Stage | snes9x (BizHawk) | LakeSnes (`lakesnes_ref`) |
+|-------|------------------|---------------------------|
+| Title `$04` | f209 | f209 (identical) |
+| `Start+Y` → `$06` | $32←06 then $36=06 | $32←06 @PC `85:85F6`, $36=06 @f599 ✅ |
+| **`Start` → `$08`** | $32←08, $36=08 @f896 ✅ | **never — `$32` never written again** ❌ |
+
+The confirm button is **`START` alone** (Start+Y worked only because of the Start
+bit; `Y`-alone advances neither).
+
+**Everything "easy" is ruled out — the input path is fully healthy in LakeSnes:**
+- Input reaches the `$06` handler: cursor `$7E` steps `06→0C→12→18` on LEFT/RIGHT
+  (handled at PC `85:9478`).
+- The **START edge is correctly computed**: `$0029=$10` fires 10× during the Start
+  pulses at `$06` (edge routine PC `80:8451`; current-held `$0021=$10` @PC `80:844A`).
+- Sub-state `$2C`/`$2E` are **identical** to snes9x (`00`/`00`; written @PC
+  `85:85C2`/`85:85B0`).
+- The screen is **fully faded in** at `$06` (brightness 15 by ~f720, mode 0).
+
+⇒ The `$06` driver-select handler **sees the START edge but never fires the
+`$32←$08` advance**, where snes9x does with identical input. This is a real
+**LakeSnes-vs-snes9x emulation-accuracy divergence inside the driver-select confirm
+gate** — not input delivery, edge detection, sub-state, or fade timing.
+
+**Next (deeper tools needed):** the naive `tools/disasm/disasm65816.py` is not
+M/X-flag-aware, so it mis-decodes the handler. To pin the gated condition, either
+(a) make a flag-accurate trace of the `$06` per-frame handler's confirm branch and
+find what it tests besides the button, or (b) step-debug both cores at the confirm
+and diff the tested value. Candidate gates to check: a "driver-locked"/helmet sub-
+state, a 2P-readiness flag, or an APU/handshake value the confirm polls.
+
 ---
 ### Superseded hypothesis (kept for history)
 
