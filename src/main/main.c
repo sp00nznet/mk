@@ -6,7 +6,10 @@
  */
 
 #include <snesrecomp/snesrecomp.h>
+#include <snesrecomp/menu_overlay.h>
 #include "smk/functions.h"
+
+#define SMK_STATE_PATH "smk_state.sav"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,6 +187,24 @@ int main(int argc, char *argv[]) {
     while (realframe ? snesrecomp_realframe_begin() : snesrecomp_begin_frame()) {
         /* Apply scripted input (after the input read; overrides keyboard). */
         apply_script(frame_no);
+
+        /* File-menu emulator controls (New=reset, Save/Load = save-state). */
+        if (menu_overlay_take_reset()) {
+            snesrecomp_reset();
+            if (!realframe) smk_80FF70();   /* shell mode: re-run the recompiled boot chain */
+            frame_no = 0;
+        }
+        if (menu_overlay_take_save_state()) snesrecomp_save_state(SMK_STATE_PATH);
+        if (menu_overlay_take_load_state()) snesrecomp_load_state(SMK_STATE_PATH);
+
+        /* Scripted save/load at a frame (testing/automation):
+         * SMK_SAVESTATE_AT=<frame> / SMK_LOADSTATE_AT=<frame>. */
+        {
+            const char *sa = getenv("SMK_SAVESTATE_AT");
+            const char *la = getenv("SMK_LOADSTATE_AT");
+            if (sa && frame_no == atoi(sa)) snesrecomp_save_state(SMK_STATE_PATH);
+            if (la && frame_no == atoi(la)) snesrecomp_load_state(SMK_STATE_PATH);
+        }
 
         if (realframe) {
             /* Full cycle-accurate frame on the LakeSnes CPU (CPU + NMI + HDMA +

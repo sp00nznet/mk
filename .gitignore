@@ -69,3 +69,4 @@ tools/mesen/*.txt
 
 # Runtime user config (written by the ImGui menu)
 smk_config.ini
+smk_state.sav
