@@ -155,14 +155,47 @@ int main(int argc, char *argv[]) {
      * real-frame, for explicitness.) */
     bool realframe = (getenv("SMK_SHELLS") == NULL) || (getenv("SMK_REALFRAME") != NULL);
 
+    /* Timed-recomp (Phase-1 of replacing real-frame mode with static recomp):
+     * run the real-frame timed loop (real PPU/APU/NMI timing) BUT intercept
+     * registered recompiled functions, executing native C in place of the ROM
+     * subroutine. Proves the static-recomp execution model end-to-end one
+     * function at a time, validated bit-identical to real-frame via the
+     * snapshot-diff harness. Implies real-frame timing. */
+    bool recomp = (getenv("SMK_RECOMP") != NULL);
+    if (recomp) realframe = true;
+
     /* === Run the boot chain (shell mode only) === */
     if (!realframe) {
         printf("smk: SHELL mode (recompiled per-frame shells)\n");
         printf("--- Running boot chain ---\n");
         smk_80FF70();
         printf("--- Boot chain done ---\n\n");
+    } else if (recomp) {
+        printf("smk: TIMED-RECOMP mode (real-frame timing + recompiled-function interception)\n");
     } else {
         printf("smk: REAL-FRAME mode (full LakeSnes execution) — set SMK_SHELLS=1 for the recomp shell path\n");
+    }
+
+    /* Install the interception hook + register the intercept set. Default is the
+     * single OAM-DMA leaf $80:946E (RTS/near). Override with
+     * SMK_RECOMP_INTERCEPTS="80946E,81xxxx:L,..." (comma-separated 24-bit hex;
+     * suffix ':L' marks a JSL/RTL-return routine, default JSR/RTS). */
+    if (recomp) {
+        recomp_timed_recomp_enable();
+        const char *iv = getenv("SMK_RECOMP_INTERCEPTS");
+        if (iv && *iv) {
+            char buf[256];
+            strncpy(buf, iv, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
+            for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) {
+                bool is_long = (strchr(t, 'L') || strchr(t, 'l')) != NULL;
+                uint32_t a = (uint32_t)strtoul(t, NULL, 16);
+                recomp_timed_add_intercept(a, is_long);
+                printf("smk: intercept $%06X (%s)\n", a, is_long ? "RTL" : "RTS");
+            }
+        } else {
+            recomp_timed_add_intercept(0x80946E, false);   /* OAM DMA, RTS */
+            printf("smk: intercept $80946E (RTS) [smk_80946E OAM DMA]\n");
+        }
     }
 
     printf("Running... (press Escape to quit)\n\n");
@@ -299,6 +332,14 @@ int main(int argc, char *argv[]) {
                    frame_no, bus_wram_read16(0x36), bus_wram_read16(0x32),
                    bus_wram_read16(0x0158), bus_wram_read16(0x0172),
                    bus_wram_read16(0x80));
+        }
+
+        /* Timed-recomp diagnostics: confirm the interception fired and let the
+         * WRAM checksum be diffed against a plain real-frame run at the same
+         * frame (bit-identical => the recompiled function is faithful). */
+        if (recomp && frame_no % 60 == 0) {
+            printf("smk[f%d]: intercept_hits=%lu wram_csum=%08X\n",
+                   frame_no, recomp_timed_intercept_hits(), snesrecomp_wram_checksum());
         }
 
         /* Report netplay state transitions. */

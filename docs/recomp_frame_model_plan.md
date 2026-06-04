@@ -162,3 +162,49 @@ DMA) through its `RECOMP_PATCH` while everything else interprets *with timing on
 and confirm via the diff harness it stays bit-identical to `snes_runFrame` through a
 race. That proves the interception + timed model end-to-end on one function; the rest
 is repetition.
+
+## 10. Phase-1 prototype — built & validated (2026-06)
+
+Implemented behind `SMK_RECOMP=1` (off by default; zero overhead elsewhere):
+
+- **CPU opcode-fetch hook** (`g_cpuRecompHook` in LakeSnes `cpu.c`, NULL by default so
+  `lakesnes_ref` and real-frame are untouched). When set, it is consulted before each
+  opcode in the timed loop.
+- **Interception** (`recomp_timed_*` in `recomp_interp.c`): a registered entry address
+  runs its recompiled C body (sync LakeSnes regs → `g_cpu`, run native, sync back) and
+  PB:PC is advanced past the routine via a simulated RTS (near) / RTL (long), using the
+  return frame the JSR/JSL left on the stack. Reuses the interp's `sync_to/from_lake`.
+- **Host wiring** (`mk` `main.c`): `SMK_RECOMP=1` runs the real-frame timed loop with
+  the hook on; `SMK_RECOMP_INTERCEPTS="80946E,81xxxx:L,…"` overrides the set (default
+  the OAM-DMA leaf `$80:946E`). Per-60-frame `intercept_hits` + WRAM-checksum print.
+
+**Result — the model works.** With `$80:946E` intercepted, the timed-recomp run is
+**byte-identical to the pure-emulation oracle (WRAM+VRAM+CGRAM) for 86 consecutive
+frames** (`tools/diff_snapshots.py`, `SMK_SNAPSHOT_EVERY=1`). The hook fires cleanly
+(frame 3, correct JSR/RTS return, `db=$80` matches), and the game boots/renders for
+180+ frames. Real-frame itself is fully deterministic run-to-run (control: `ref≡ref2`),
+so the harness is a sound oracle.
+
+**Finding 1 — sub-frame APU-timing fidelity is the real hurdle, not master-cycle
+accounting.** From frame 87 a *tiny, intermittent* WRAM divergence appears (values like
+`$54/$77/$D5` where the oracle has `$00`; heals and recurs) with **zero VRAM/CGRAM
+impact** — an audio/handshake-buffer phase artifact. Because WRAM+VRAM+CGRAM are
+identical for 86 frames before it, the differing state is *hidden* (OAM or, most likely,
+**SPC700/APU interleaving**: the game polls `$2140-$2143` and the SPC's continuous
+execution phase differs from how the instant native body consumed cycles). A one-shot
+master-cycle compensation (`SMK_RECOMP_CYCLES`, swept 0→170) had **no effect**,
+confirming it is interleaving-phase, not a simple cycle offset. → For hardware-/
+APU-touching routines, fidelity needs the native body to advance the APU the way the
+original instruction stream does (or keep such routines interpreted). Pure-logic
+routines should be unaffected.
+
+**Finding 2 — most existing `RECOMP_PATCH` bodies are shell-era approximations, not
+faithful ports** (e.g. `smk_80853D` literally "simplified to just START"; `smk_80843C`
+omits the original's `JSR`s). They cannot be bit-identical by construction. → Phase 3 is
+not just "recompile more" but "make each body faithful, gated by this harness."
+`smk_80946E` was the most faithful available and is the one used above.
+
+**Conclusion.** The timed-loop + interception execution model is proven end-to-end: a
+recompiled function plugged into the timed loop reproduces the oracle bit-for-bit for
+dozens of frames. The remaining work is fidelity (faithful bodies + APU/sub-frame
+timing for hardware-touching routines) and breadth — exactly Phase 3.
