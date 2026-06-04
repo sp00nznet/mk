@@ -104,9 +104,33 @@ Start to confirm) and **no pokes/hacks**, `tools/lakesnes_ref` now walks
 (`tools/ref_flow2_f001200.png`). This is the same divergence that blocked the recomp's
 menu→race flow all along.
 
-> NEXT: rebuild the full recomp launcher (shares this `snes.c`) and confirm the live
-> menu→race flow now works from controller input without the `SMK_FORCE_FROM_STATE`
-> hybrid shortcut.
+### Live recomp launcher — genuine flow integrated (2026-06-03)
+
+The full launcher now runs the genuine flow too. `snes_loadRom` → `snes_reset(hard)`
+applies the `0x55` fill, and **force-interpret** (the default; `SMK_INTERP=1`, NOT
+`SMK_INTERP=0` which prefers the recompiled placeholder handlers) runs the genuine
+`$81:E000` sequencer. With pure scripted controller input (`SMK_HEADLESS=1
+SMK_SCRIPT=...`, Start+Y to enter, START to confirm) and **no `SMK_FORCE_FROM_STATE`**,
+`smk_launcher` walks:
+
+```
+f1   $36=04 (title, $32=0 — genuine; no $14 detour)
+f481 $32=06 -> f482 $36=06 (driver select, renders: docs/flow/recomp_driver_select.png)
+f724 $32=08 -> f725 $36=08 (class/cup)
+f811 $32=02 -> f812 $36=02 (RACE state)
+```
+
+So the **menu→race navigation is fully integrated** into the live recomp, and the menu
+screens render. (`SMK_INTERP=0`'s simplified `$04→$14→$06` path is now obsolete for this
+flow.)
+
+**Remaining (separate, pre-existing):** at `$36=$02` the launcher's PPU stays
+`forcedBlank=1 brightness=0 mode=1` — the Mode-7 race doesn't set up, where
+`lakesnes_ref` (full `snes_runFrame`) renders it fine. This is the recomp **frame-model
+/ HDMA** gap (the per-frame `smk_808000`+`smk_808056` shells don't reproduce the full
+race setup that real per-scanline HDMA does), the same area the old
+`SMK_FORCE_FROM_STATE=08` + end_frame-HDMA hybrid worked around. Distinct from the menu
+fix; next target for live gameplay rendering.
 
 ---
 ### Superseded hypothesis (kept for history)
