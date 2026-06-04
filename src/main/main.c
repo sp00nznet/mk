@@ -7,6 +7,7 @@
 
 #include <snesrecomp/snesrecomp.h>
 #include <snesrecomp/menu_overlay.h>
+#include <snesrecomp/mp_session.h>
 #include "smk/functions.h"
 
 #define SMK_STATE_PATH "smk_state.sav"
@@ -166,6 +167,19 @@ int main(int argc, char *argv[]) {
 
     printf("Running... (press Escape to quit)\n\n");
 
+    /* Netplay auto-connect for testing/automation (the menu does this
+     * interactively): SMK_MP_HOST=<port> or SMK_MP_JOIN=<ip>:<port>. Netplay
+     * runs in real-frame mode (lockstep in snesrecomp_realframe_begin). */
+    {
+        const char *mph = getenv("SMK_MP_HOST");
+        const char *mpj = getenv("SMK_MP_JOIN");
+        if (mph) { mp_host(atoi(mph)); }
+        else if (mpj) {
+            char ip[64]; int port = 0;
+            if (sscanf(mpj, "%63[^:]:%d", ip, &port) == 2) mp_join(ip, port);
+        }
+    }
+
     parse_script();
     s_lock_input = (getenv("SMK_SCRIPT") != NULL) || (getenv("SMK_HEADLESS") != NULL);
     int max_frames = 0;
@@ -283,6 +297,15 @@ int main(int argc, char *argv[]) {
                    frame_no, bus_wram_read16(0x36), bus_wram_read16(0x32),
                    bus_wram_read16(0x0158), bus_wram_read16(0x0172),
                    bus_wram_read16(0x80));
+        }
+
+        /* Netplay lockstep verification: matching checksums on both peers (at the
+         * same lockstep frame) confirm deterministic sync. */
+        if (mp_get_state() == MP_CONNECTED) {
+            static int mp_ls = -1;
+            mp_ls++;
+            if (mp_ls % 120 == 0)
+                printf("MP lockstep f%d: wram_csum=%08X\n", mp_ls, snesrecomp_wram_checksum());
         }
 
         if (max_frames > 0 && frame_no >= max_frames) {
