@@ -143,14 +143,15 @@ build/Debug/smk_launcher.exe
 
 The ROM file is not included — supply your own US v1.0 copy (MD5: `7f25ce5a283d902694c52fb1152fa61a`).
 
-**Playing the full game (including races):** the recompiled per-frame shells can't yet
-drive the Mode-7 race's multi-frame setup, so to play through a race set
-`SMK_REALFRAME=1` — this runs the genuine ROM via LakeSnes's full cycle-accurate frame
-(menus *and* the Mode-7 race render and play). The default (no flag) uses the
-recompiled-shell path for recompilation development.
+By default the launcher runs in **real-frame mode** — the genuine ROM via LakeSnes's
+full cycle-accurate frame — so menus *and* the Mode-7 race render and play at full
+speed out of the box. (The recompiled per-frame shells can't yet drive the race's
+multi-frame setup; as gameplay functions are recompiled they take over.)
+
+For recompilation development, use the recompiled-shell path:
 
 ```bash
-SMK_REALFRAME=1 build/Debug/smk_launcher.exe        # full playable game
+SMK_SHELLS=1 build/Debug/smk_launcher.exe           # recompiled per-frame shells
 ```
 
 ## Decompressor

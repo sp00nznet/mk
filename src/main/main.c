@@ -139,20 +139,26 @@ int main(int argc, char *argv[]) {
         printf("smk: interpreter force mode = %s\n", force ? "ON" : "OFF");
     }
 
-    /* Real-frame mode: bypass the recompiled boot chain + per-frame shells and
-     * run the genuine ROM via LakeSnes's full cycle-accurate frame (like
-     * tools/lakesnes_ref). Renders everything the shells can't yet drive — in
-     * particular the Mode-7 race, whose multi-frame init/fade-in the shells drop.
-     * SMK_REALFRAME=1. The CPU boots from the reset vector on the first frame. */
-    bool realframe = getenv("SMK_REALFRAME") != NULL;
+    /* Real-frame mode is the DEFAULT: bypass the recompiled boot chain +
+     * per-frame shells and run the genuine ROM via LakeSnes's full cycle-accurate
+     * frame (like tools/lakesnes_ref). This renders and plays the whole game,
+     * including the Mode-7 race the shells can't yet drive (their dropped vblank
+     * waits leave the race's multi-frame init/fade-in incomplete). The CPU boots
+     * from the reset vector on the first frame.
+     *
+     * Set SMK_SHELLS=1 to use the recompiled per-frame shells instead — the path
+     * for incremental recompilation development. (SMK_REALFRAME=1 also forces
+     * real-frame, for explicitness.) */
+    bool realframe = (getenv("SMK_SHELLS") == NULL) || (getenv("SMK_REALFRAME") != NULL);
 
     /* === Run the boot chain (shell mode only) === */
     if (!realframe) {
+        printf("smk: SHELL mode (recompiled per-frame shells)\n");
         printf("--- Running boot chain ---\n");
         smk_80FF70();
         printf("--- Boot chain done ---\n\n");
     } else {
-        printf("smk: REAL-FRAME mode (full LakeSnes execution; recomp shells bypassed)\n");
+        printf("smk: REAL-FRAME mode (full LakeSnes execution) — set SMK_SHELLS=1 for the recomp shell path\n");
     }
 
     printf("Running... (press Escape to quit)\n\n");
