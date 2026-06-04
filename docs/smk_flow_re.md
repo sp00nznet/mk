@@ -68,12 +68,45 @@ bit; `Y`-alone advances neither).
 **LakeSnes-vs-snes9x emulation-accuracy divergence inside the driver-select confirm
 gate** — not input delivery, edge detection, sub-state, or fade timing.
 
-**Next (deeper tools needed):** the naive `tools/disasm/disasm65816.py` is not
-M/X-flag-aware, so it mis-decodes the handler. To pin the gated condition, either
-(a) make a flag-accurate trace of the `$06` per-frame handler's confirm branch and
-find what it tests besides the button, or (b) step-debug both cores at the confirm
-and diff the tested value. Candidate gates to check: a "driver-locked"/helmet sub-
-state, a 2P-readiness flag, or an APU/handshake value the confirm polls.
+## ⭐⭐⭐ SOLVED — power-on WRAM fill ($2E game-mode). FIX SHIPPED (2026-06-03)
+
+Cracked with a **trace-diff harness** added to LakeSnes: `cpu.c` gained a frame-gated
+range trace (globals `g_cpuTraceOn/Lo/Hi`), driven by `tools/lakesnes_ref` via
+`SMK_TRACE_RANGE="lo-hi"` + `SMK_TRACE_FRAMES="n,..."`. Diffing the `$06` handler on a
+Start-press frame vs a no-press frame (isolating just the input edge) walked straight
+to the gate.
+
+**The confirm chain** (`$06` per-frame handler `$85:90B1`, all 16-bit M/X):
+- `$85:9487` `LDA $6A / ORA $6C / AND #$9000 / BNE $949A` — confirm = **B or START**
+  edge. (The button is START; Y is irrelevant. `$6A`/`$6C` are the joy1/joy2 edges.)
+- `$949A` → first press **locks** the cursor's player (`$70,x = 1`, SFX `$002E`);
+  second press (`$70,x==1`) → `$952C`, sets `$70,x = 2` ("player done").
+- `$85:965B` is the **advance gate**: `LDA $70 / CMP #2 / BNE rts` **and**
+  `LDA $72 / CMP #2 / BNE rts` — requires **BOTH** 1P (`$70`) and 2P (`$72`) == 2,
+  then a 64-frame settle (`$96`→`$40`) before advancing to `$08`.
+
+**Why snes9x advanced but LakeSnes didn't:** in snes9x `$72=2` (2P auto-done) at `$06`
+entry, so 1P-only confirm satisfies the gate. In LakeSnes `$72` stays 0 → waits forever
+for a player-2 confirm that controller-1 never gives. That traces to **`$2E` (game
+mode)**: clamp at `$81:E46A` is `LDA $2E / AND #$FFFE / CMP #5 / BCC keep / LDA #2 /
+STA $2E` — i.e. **garbage → 2** (1-player, 2P auto-done) but a clean **0 → 0**
+(2-player). snes9x/hardware power-on WRAM is non-zero (`0x55` fill → every word
+`$5555` → `$2E`=2); LakeSnes did `memset(ram, 0, …)` → `$2E`=0.
+
+(The earlier "`$2C`/`$2E` identical 00/00" note was a red herring — that read the byte
+written by the entry path, not the boot-time game-mode that the `$81:E46A` clamp
+resolves from uninitialized RAM.)
+
+**FIX (`ext/snesrecomp/ext/LakeSnes/snes/snes.c`):** power-on WRAM fill `0x00 → 0x55`,
+matching snes9x/hardware. Verified: with **pure controller input** (Start+Y to enter,
+Start to confirm) and **no pokes/hacks**, `tools/lakesnes_ref` now walks
+`$04 → $06 (f599) → $08 (f826) → $02 race (f1045)` and renders the Mode-7 track
+(`tools/ref_flow2_f001200.png`). This is the same divergence that blocked the recomp's
+menu→race flow all along.
+
+> NEXT: rebuild the full recomp launcher (shares this `snes.c`) and confirm the live
+> menu→race flow now works from controller input without the `SMK_FORCE_FROM_STATE`
+> hybrid shortcut.
 
 ---
 ### Superseded hypothesis (kept for history)

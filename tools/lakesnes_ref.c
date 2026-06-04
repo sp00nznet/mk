@@ -166,10 +166,28 @@ int main(int argc, char **argv) {
           t = strtok(NULL, ",");
         } } }
 
+    /* SMK_TRACE_RANGE="lo-hi" (24-bit hex PCs) + SMK_TRACE_FRAMES="f1,f2,..."
+     * — emit a full instruction trace of [lo,hi] on exactly those frames, to
+     * stderr, with a "=== FRAME n ===" marker. Diff a press vs no-press frame to
+     * find the confirm branch. */
+    extern int g_cpuTraceOn; extern uint32_t g_cpuTraceLo, g_cpuTraceHi;
+    int trace_frames[16], trace_nf = 0;
+    { const char *r = getenv("SMK_TRACE_RANGE");
+      if (r) { unsigned lo=0, hi=0; if (sscanf(r, "%x-%x", &lo, &hi) == 2) {
+        g_cpuTraceLo = lo; g_cpuTraceHi = hi;
+        printf("native: trace range %06X-%06X\n", lo, hi); } }
+      const char *ff = getenv("SMK_TRACE_FRAMES");
+      if (ff) { char b[128]; strncpy(b, ff, 127); b[127]=0;
+        char *t = strtok(b, ","); while (t && trace_nf < 16) { trace_frames[trace_nf++] = atoi(t); t = strtok(0, ","); } } }
+
     int captured = 0;
     uint16_t last_state = 0xFFFF;
     for (int i = 1; i <= max_frames; i++) {
         if (g_script_n) ref_apply_script(snes, i);
+        /* toggle the range trace on selected frames */
+        if (g_cpuTraceHi) { g_cpuTraceOn = 0;
+          for (int k = 0; k < trace_nf; k++) if (trace_frames[k] == i) g_cpuTraceOn = 1;
+          if (g_cpuTraceOn) fprintf(stderr, "=== FRAME %d ===\n", i); }
         /* from >= 0: continuous from that frame. from < 0: one-shot at -from. */
         for (int k = 0; k < pk_n; k++)
           if (pk_from[k] >= 0 ? (i >= pk_from[k]) : (i == -pk_from[k])) {
