@@ -8,6 +8,7 @@
 #include "smk/functions.h"
 
 #include <snesrecomp/snesrecomp.h>
+#include <snesrecomp/func_table.h>
 #include <stdio.h>
 
 /*
@@ -819,6 +820,52 @@ RECOMP_PATCH(smk_80843C, 0x80843C) {
     }
 
     g_cpu.DB = saved_db;
+}
+
+/*
+ * $80:8445 — Per-controller input edge-detect (the genuine LEAF that $80:843C
+ * calls; X selects the controller: 0=joy1, 2=joy2). Reached via JSR $8445
+ * (X=0) and by fall-through (X=2) from $80:843C. m16/x16.
+ *
+ * This is a FAITHFUL port (unlike the simplified smk_80843C above): it includes
+ * the demo/attract gate and the JML $80:85FD soft-reset path. That path is
+ * taken only on a Start-combo while $0E32!=0 && $0E50==0 && $0032==0 — never in
+ * the steady-state title — and exits via redirect (JML), not RTS.
+ *
+ *   LDA $4218,x / STA $20,x / PHA
+ *   EOR $24,x / AND $20,x / STA $28,x         ; edges = (cur^prev) & cur
+ *   LDY $0E32 / BEQ $846A                      ; continue only if $0E32 != 0
+ *   LDY $0E50 / BNE $846A                      ; ...and $0E50 == 0
+ *   LDY $0032 / BNE $846A                      ; ...and $0032 == 0
+ *   BIT #$9000 / BEQ $846A                     ; ...and (edges & $9000)
+ *   PLA / JML $8085FD                          ; -> soft handler
+ *   $846A: PLA / STA $24,x / RTS
+ */
+RECOMP_PATCH(smk_808445, 0x808445) {
+    uint16_t x = (uint16_t)g_cpu.X;
+
+    uint16_t cur = bus_read16(0x80, 0x4218 + x);      /* LDA $4218,x */
+    CPU_SET_A16(cur);
+    bus_wram_write16(g_cpu.DP + 0x20 + x, cur);       /* STA $20,x   */
+    op_pha16();                                       /* PHA (real stack — the */
+                                                      /*   pushed byte persists) */
+    uint16_t prev = bus_wram_read16(g_cpu.DP + 0x24 + x);
+    uint16_t edges = (uint16_t)((cur ^ prev) & cur);  /* EOR $24,x; AND $20,x */
+    CPU_SET_A16(edges);
+    bus_wram_write16(g_cpu.DP + 0x28 + x, edges);     /* STA $28,x   */
+
+    if (bus_wram_read16(0x0E32) != 0 &&               /* LDY $0E32 / BEQ $846A */
+        bus_wram_read16(0x0E50) == 0 &&               /* LDY $0E50 / BNE $846A */
+        bus_wram_read16(g_cpu.DP + 0x32) == 0 &&      /* LDY $0032 / BNE $846A */
+        (edges & 0x9000) != 0) {                      /* BIT #$9000 / BEQ $846A */
+        op_pla16();                                   /* PLA */
+        recomp_set_redirect(0x8085FD);                /* JML $8085FD (no RTS) */
+        return;
+    }
+
+    /* $846A: PLA / STA $24,x / RTS */
+    op_pla16();                                       /* PLA (A = cur, sets N/Z) */
+    bus_wram_write16(g_cpu.DP + 0x24 + x, CPU_A16()); /* STA $24,x (prev = cur) */
 }
 
 /*

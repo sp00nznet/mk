@@ -161,8 +161,9 @@ int main(int argc, char *argv[]) {
      * subroutine. Proves the static-recomp execution model end-to-end one
      * function at a time, validated bit-identical to real-frame via the
      * snapshot-diff harness. Implies real-frame timing. */
-    bool recomp = (getenv("SMK_RECOMP") != NULL);
-    if (recomp) realframe = true;
+    bool recomp  = (getenv("SMK_RECOMP") != NULL);
+    bool profile = (getenv("SMK_RECOMP_PROFILE") != NULL);
+    if (recomp || profile) realframe = true;
 
     /* === Run the boot chain (shell mode only) === */
     if (!realframe) {
@@ -174,6 +175,15 @@ int main(int argc, char *argv[]) {
         printf("smk: TIMED-RECOMP mode (real-frame timing + recompiled-function interception)\n");
     } else {
         printf("smk: REAL-FRAME mode (full LakeSnes execution) — set SMK_SHELLS=1 for the recomp shell path\n");
+    }
+
+    /* Profiling-only mode: install the hook to rank the hottest JSR/JSL targets
+     * (Phase-3 recompilation candidates), without intercepting anything. Dumps
+     * the top-N at exit. */
+    if (profile) {
+        recomp_timed_recomp_enable();
+        recomp_timed_profile_enable();
+        printf("smk: TIMED-RECOMP PROFILE mode (ranking JSR/JSL call targets)\n");
     }
 
     /* Install the interception hook + register the intercept set. Default is the
@@ -193,8 +203,13 @@ int main(int argc, char *argv[]) {
                 printf("smk: intercept $%06X (%s)\n", a, is_long ? "RTL" : "RTS");
             }
         } else {
-            recomp_timed_add_intercept(0x80946E, false);   /* OAM DMA, RTS */
-            printf("smk: intercept $80946E (RTS) [smk_80946E OAM DMA]\n");
+            /* Default: the steady-state leaf validated functionally exact vs the
+             * emulation oracle (live WRAM + VRAM + CGRAM identical; only dead
+             * stack scratch differs — gate with --ignore-wram 1F00-1FFF). The
+             * boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
+             * perturbs audio WRAM phase; reach it via SMK_RECOMP_INTERCEPTS. */
+            recomp_timed_add_intercept(0x808445, false);   /* input edge-detect, RTS */
+            printf("smk: intercept $808445 [input edge-detect]\n");
         }
     }
 
@@ -368,6 +383,8 @@ int main(int argc, char *argv[]) {
             break;
         }
     }
+
+    if (profile) recomp_timed_profile_dump(40);
 
     printf("Shutting down...\n");
     snesrecomp_shutdown();

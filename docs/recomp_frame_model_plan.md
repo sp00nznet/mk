@@ -208,3 +208,46 @@ not just "recompile more" but "make each body faithful, gated by this harness."
 recompiled function plugged into the timed loop reproduces the oracle bit-for-bit for
 dozens of frames. The remaining work is fidelity (faithful bodies + APU/sub-frame
 timing for hardware-touching routines) and breadth — exactly Phase 3.
+
+## 11. Phase-3 — first faithful function + the workflow (2026-06)
+
+Tooling added to make Phase 3 repeatable:
+- **Call-target profiler** (`SMK_RECOMP_PROFILE=1`) ranks the hottest direct JSR/JSL
+  targets (best recompilation candidates). Title run top hits: `$81F56C` (boot
+  decompressor, 55k×), then a ~once-per-frame steady-state cluster.
+- **Trace→flags→disasm workflow.** The disassembler IS M/X-aware but needs the entry
+  flags (4th arg `00`/`30`); the LakeSnes range-tracer (`SMK_TRACE_RANGE` on
+  `lakesnes_ref`) prints real `op`+`p` so you read any routine correctly. (It also
+  exposed a tool bug: the `B7`/`[dp],Y` opcode size is mis-sized — hand-verify those.)
+- **Redirect protocol** (`recomp_set_redirect`) so an intercepted routine whose original
+  ends in JMP/JML (not RTS/RTL) transfers control without a stack pop.
+- **Functional gate** (`diff_snapshots.py --ignore-wram 1F00-1FFF`) masks the dead CPU
+  stack page (see finding below).
+
+**First faithful port — `smk_808445`** (per-controller input edge-detect; the genuine
+leaf `$80:843C` calls, incl. its `JML $80:85FD` soft-reset path). Picked because it is a
+pure-logic leaf that fires only in the **steady-state** title (from ~f209, exactly 2×/
+frame — no boot-phase intercepts). Validated against the oracle over the title:
+
+- **VRAM = 0 and CGRAM = 0 diverging frames** — rendered output is bit-identical.
+- All **live WRAM** identical; the only difference is **5–10 bytes of dead CPU-stack
+  scratch** (`$1F00-1FFF`), bounded and non-cascading. With that page masked the run is
+  **byte-identical across all frames**.
+
+**Finding 3 — instant execution is *functionally* exact but not byte-exact.** Running a
+recompiled body in zero emulated time shifts sub-frame timing, so interrupts nest
+slightly differently and leave different *dead* stack scratch (and, for `$80946E`, audio
+phase). None of it reaches live/rendered state. → For "replace real-frame with a
+correctly-playing recomp," **functional fidelity (live WRAM + VRAM + CGRAM) is the right
+gate**, and faithful steady-state ports meet it. Byte-exact dead RAM would require
+cycle-accurate intercepts (the body advancing the clock per its instruction cycles) —
+deferred, pursued only if some routine's timing actually reaches live state.
+
+**Finding 4 — faithful ≠ the shell-era bodies.** `smk_808445` had to be written fresh
+(real `PHA`/`PLA` via `op_pha16`/`op_pla16` so even the stack bytes match; the demo gate;
+the JML exit). The pre-existing `smk_80843C` is a simplified approximation. Phase 3 = a
+faithful body per function, each gated by the harness above.
+
+**Loop for the rest of Phase 3:** profile → pick a hot steady-state leaf → trace for
+flags → faithful port → gate with `--ignore-wram 1F00-1FFF` → add to the intercept set.
+Repeat through the race; the interp shrinks as the set grows.

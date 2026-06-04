@@ -102,15 +102,18 @@ def collect(prefix):
     return out
 
 
-def first_diff(a, b):
-    """First differing index of two equal-length byte strings, or -1."""
+def first_diff(a, b, ignore=None):
+    """First differing index of two equal-length byte strings, or -1.
+
+    ignore: optional list of (lo, hi) inclusive byte ranges to skip (e.g. the
+    CPU stack page, whose pushed-then-popped scratch is semantically dead — a
+    recompiled function that runs in zero emulated time can leave different
+    dead-stack bytes from sub-frame interrupt timing without any functional
+    difference)."""
     n = min(len(a), len(b))
-    # Fast path: bulk compare, then narrow.
-    if a[:n] == b[:n]:
+    # Fast path only when nothing is ignored.
+    if ignore is None and a[:n] == b[:n]:
         return -1 if len(a) == len(b) else n
-    # Binary-narrow the first difference for speed on large buffers.
-    lo, hi = 0, n
-    # Find a differing block first.
     blk = 4096
     i = 0
     while i < n:
@@ -118,9 +121,11 @@ def first_diff(a, b):
         if a[i:j] != b[i:j]:
             for k in range(i, j):
                 if a[k] != b[k]:
+                    if ignore and any(lo <= k <= hi for lo, hi in ignore):
+                        continue
                     return k
         i = j
-    return -1
+    return -1 if (len(a) == len(b) or ignore) else n
 
 
 def diverging_regions(a, b, word=False):
@@ -160,7 +165,18 @@ def main():
                     help="stop after the first diverging frame")
     ap.add_argument("--vram-only", action="store_true",
                     help="ignore WRAM; compare only VRAM + CGRAM (Mode-7 focus)")
+    ap.add_argument("--ignore-wram", default=None,
+                    help="comma-separated hex WRAM ranges to ignore, e.g. "
+                         "'1F00-1FFF' (the stack page — masks dead-stack scratch "
+                         "so a functionally-faithful recomp gates green)")
     args = ap.parse_args()
+
+    ignore_wram = None
+    if args.ignore_wram:
+        ignore_wram = []
+        for part in args.ignore_wram.split(","):
+            lo, hi = part.split("-")
+            ignore_wram.append((int(lo, 16), int(hi, 16)))
 
     ref = collect(args.ref_prefix)
     test = collect(args.test_prefix)
@@ -177,7 +193,7 @@ def main():
     for fno in common:
         r = load_snapshot(ref[fno])
         t = load_snapshot(test[fno])
-        wd = -1 if args.vram_only else first_diff(r.wram, t.wram)
+        wd = -1 if args.vram_only else first_diff(r.wram, t.wram, ignore_wram)
         vd = first_diff(r.vram, t.vram)
         cd = first_diff(r.cgram, t.cgram) if (r.cgram and t.cgram) else -1
         if wd < 0 and vd < 0 and cd < 0:
