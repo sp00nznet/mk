@@ -173,6 +173,8 @@ int main(int argc, char *argv[]) {
     {
         const char *mph = getenv("SMK_MP_HOST");
         const char *mpj = getenv("SMK_MP_JOIN");
+        const char *mpd = getenv("SMK_MP_DELAY");
+        if (mpd) mp_set_delay(atoi(mpd));   /* host: input-delay frames (sent to client) */
         if (mph) { mp_host(atoi(mph)); }
         else if (mpj) {
             char ip[64]; int port = 0;
@@ -297,6 +299,13 @@ int main(int argc, char *argv[]) {
                    frame_no, bus_wram_read16(0x36), bus_wram_read16(0x32),
                    bus_wram_read16(0x0158), bus_wram_read16(0x0172),
                    bus_wram_read16(0x80));
+        }
+
+        /* Report netplay state transitions. */
+        {
+            static int last_mp = -1;
+            int s = (int)mp_get_state();
+            if (s != last_mp) { printf("MP state -> %d (%s)\n", s, mp_status_text()); last_mp = s; }
         }
 
         /* Netplay lockstep verification: matching checksums on both peers (at the
