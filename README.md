@@ -10,11 +10,19 @@ Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. T
 
 All recompiled functions are defined with `RECOMP_PATCH(name, snes_addr) { ... }` and auto-register in snesrecomp's dispatch table at static-init time — adding a new translated function is a one-line change at the definition site, no central list to maintain.
 
-![Title Screen](titlewithchar.png)
+![Title Screen](newtitle.png)
+
+The full menu flow runs from controller input — title → driver select → class/cup select:
+
+![Driver Select](charselect.png)
+
+![Class / Cup Select](class.png)
 
 The Mode-7 race renders too — perspective track, lane markings, scenery, and HUD:
 
 ![Mode-7 Race](mode7_race.png)
+
+A Dear ImGui menu bar (File / Graphics / Sound / Controller / Multiplayer / Help) overlays the game — see [Menu](#menu).
 
 ### What works
 - Full boot chain: reset vector → hardware init → WRAM clear → PPU/APU/DSP-1 setup → Mode 7 angle table

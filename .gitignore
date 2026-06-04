@@ -63,6 +63,9 @@ tools/mesen/*.txt
 !/titlewithchar.png
 !/mode7_race.png
 !/driver_select.png
+!/newtitle.png
+!/charselect.png
+!/class.png
 
 # Runtime user config (written by the ImGui menu)
 smk_config.ini
