@@ -146,6 +146,24 @@ flow.)
   a stopgap, not the recomp end-goal). The old `SMK_FORCE_FROM_STATE=08` hybrid rendered
   it via end_frame-HDMA, so a path exists.
 
+**Deeper trace (2026-06-03b) — the real blocker is the fade-in, not HDMA:** per-scanline
+HDMA is ALREADY implemented in `snesrecomp_end_frame` (`dma_hdmaRunLine` per line before
+`ppu_runLine`). The actual cause:
+- `$2100` (INIDISP) is written **only on change** (≈15 writes / 900 frames). The
+  recompiled brightness handler `smk_80B181` (`smk_boot.c`) writes `$2100 = $0161` (high
+  byte of the fade value `$0160`). At the race `$2100` stays `$80` ⇒ `$0160=$8000`, i.e.
+  **faded-OUT / force-blank**. The race's **fade-IN trigger (`$48>0`) never fires**, so it
+  never climbs back to `$0F00`.
+- The screen-reset routine `$84:F388` (runs at race setup: `STZ $420C` disables HDMA,
+  `$2100=$80` force-blank, clears windows/color-math/OAM) leaves HDMA off + force-blank;
+  on hardware the race then re-enables HDMA and fades in over several frames.
+- Both the fade-in and HDMA re-enable are part of the **multi-frame race-init / per-frame
+  loop** that the recomp's manual shells (`smk_808000`+`smk_808056`, `smk_81E067` dropping
+  vblank waits) don't complete. `lakesnes_ref` (full `snes_runFrame`) completes it.
+- ⇒ Proper fix is frame-model work: let the race's init+fade-in+HDMA-enable sequence run
+  to completion (e.g. interpret the genuine brightness/transition path through real frames,
+  not the collapsed shells). Not a small targeted patch — scoped for a dedicated pass.
+
 ---
 ### Superseded hypothesis (kept for history)
 
