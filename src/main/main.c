@@ -203,13 +203,15 @@ int main(int argc, char *argv[]) {
                 printf("smk: intercept $%06X (%s)\n", a, is_long ? "RTL" : "RTS");
             }
         } else {
-            /* Default: the steady-state leaf validated functionally exact vs the
-             * emulation oracle (live WRAM + VRAM + CGRAM identical; only dead
-             * stack scratch differs — gate with --ignore-wram 1F00-1FFF). The
-             * boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
+            /* Default set: steady-state leaves each validated functionally exact
+             * vs the emulation oracle (live WRAM + VRAM + CGRAM identical; only
+             * dead stack scratch differs — gate with --ignore-wram 1F00-1FFF).
+             * The boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
              * perturbs audio WRAM phase; reach it via SMK_RECOMP_INTERCEPTS. */
-            recomp_timed_add_intercept(0x808445, false);   /* input edge-detect, RTS */
-            printf("smk: intercept $808445 [input edge-detect]\n");
+            recomp_timed_add_intercept(0x808445, false);   /* input edge-detect */
+            recomp_timed_add_intercept(0x8584D1, false);   /* 16-bit counter $64 */
+            recomp_timed_add_intercept(0x8181C4, false);   /* struct scatter from ROM */
+            printf("smk: intercept $808445, $8584D1, $8181C4 (validated faithful)\n");
         }
     }
 

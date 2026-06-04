@@ -251,3 +251,15 @@ faithful body per function, each gated by the harness above.
 **Loop for the rest of Phase 3:** profile → pick a hot steady-state leaf → trace for
 flags → faithful port → gate with `--ignore-wram 1F00-1FFF` → add to the intercept set.
 Repeat through the race; the interp shrinks as the set grows.
+
+**Batch 1 (default intercept set) — 3 functions, all validated byte-identical** (live
+WRAM + VRAM + CGRAM) over the steady-state title:
+- `smk_808445` — per-controller input edge-detect (incl. JML soft-reset path).
+- `smk_8584D1` — 16-bit counter `INC $64` (trivial leaf).
+- `smk_8181C4` — scatter a struct from ROM table `$81:81A8` into WRAM (m16/x16).
+
+Lesson reinforced: **always take entry M/X flags from the tracer, never infer them.**
+`smk_8181C4` first failed (wrong byte at `$0FDD`) because the disasm was run with guessed
+8-bit flags; the trace showed `P=80` (16-bit), and the 16-bit port passed. Leaf-detection
+must also use the *static* disasm (a routine can skip its `JSR`s on the traced path yet
+still contain them — e.g. `$80:9EB2`).

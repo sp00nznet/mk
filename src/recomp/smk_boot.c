@@ -869,6 +869,52 @@ RECOMP_PATCH(smk_808445, 0x808445) {
 }
 
 /*
+ * $85:84D1 — increment the 16-bit counter at $64. Leaf.
+ *   REP #$20 / INC $64 / SEP #$20 / RTS
+ */
+RECOMP_PATCH(smk_8584D1, 0x8584D1) {
+    op_rep(0x20);            /* 16-bit A */
+    op_inc_dp16(0x64);       /* INC $64 (16-bit) */
+    op_sep(0x20);            /* 8-bit A */
+}
+
+/*
+ * $81:81C4 — scatter a fixed struct from ROM table $81:81A8 into WRAM scratch.
+ * m16 / x16, DB=$81 (confirmed by trace: entry P=80). Pure-logic leaf. (The
+ * $81C9 entry, which selects table $81B6, is a separate call target, not here.)
+ *
+ *   LDY #$81A8
+ *   LDX $0000,y / STX $B8 / STZ $1EF8,x / LDA $C8,x / STA $0FE0   ; all 16-bit
+ *   LDX $0002,y / STX $CE
+ *   LDX $0004,y / STX $CC
+ *   LDX $0006,y / STX $BA
+ *   LDA $0008,y / STA $0FE2 / LDA $000A,y / STA $0FE4 / LDA $000C,y / STA $0FDC / RTS
+ */
+RECOMP_PATCH(smk_8181C4, 0x8181C4) {
+    uint8_t  db = g_cpu.DB;           /* =$81 — the table lives in this bank */
+    const uint16_t T = 0x81A8;        /* LDY #$81A8 (abs,Y base $0000 + Y) */
+
+    uint16_t w0 = bus_read16(db, T + 0x00);                 /* LDX $0000,y */
+    bus_wram_write16(g_cpu.DP + 0xB8, w0);                  /* STX $B8 */
+    bus_write16(db, (uint16_t)(0x1EF8 + w0), 0x0000);       /* STZ $1EF8,x (16-bit) */
+    bus_write16(db, 0x0FE0,
+                bus_read16(0x00, (uint16_t)(g_cpu.DP + 0xC8 + w0)));  /* LDA $C8,x / STA $0FE0 */
+
+    bus_wram_write16(g_cpu.DP + 0xCE, bus_read16(db, T + 0x02));    /* LDX $0002,y / STX $CE */
+    bus_wram_write16(g_cpu.DP + 0xCC, bus_read16(db, T + 0x04));    /* LDX $0004,y / STX $CC */
+    uint16_t w3 = bus_read16(db, T + 0x06);                        /* LDX $0006,y */
+    bus_wram_write16(g_cpu.DP + 0xBA, w3);                         /* STX $BA */
+
+    bus_write16(db, 0x0FE2, bus_read16(db, T + 0x08));            /* LDA $0008,y / STA $0FE2 */
+    bus_write16(db, 0x0FE4, bus_read16(db, T + 0x0A));            /* LDA $000A,y / STA $0FE4 */
+    uint16_t last = bus_read16(db, T + 0x0C);                     /* LDA $000C,y */
+    bus_write16(db, 0x0FDC, last);                               /* STA $0FDC */
+
+    g_cpu.X = w3;             /* final X (last LDX) */
+    g_cpu.C = last;          /* final A (last LDA) */
+}
+
+/*
  * $80:853D — Title screen input handler
  *
  * Called each frame during state $04.
