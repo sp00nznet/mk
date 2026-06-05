@@ -211,7 +211,8 @@ int main(int argc, char *argv[]) {
             recomp_timed_add_intercept(0x808445, false);   /* input edge-detect */
             recomp_timed_add_intercept(0x8584D1, false);   /* 16-bit counter $64 */
             recomp_timed_add_intercept(0x8181C4, false);   /* struct scatter from ROM */
-            printf("smk: intercept $808445, $8584D1, $8181C4 (validated faithful)\n");
+            recomp_timed_add_intercept(0x858FB8, false);   /* per-object record init */
+            printf("smk: intercept $808445,$8584D1,$8181C4,$858FB8 (validated faithful)\n");
         }
     }
 

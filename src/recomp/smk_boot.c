@@ -869,6 +869,36 @@ RECOMP_PATCH(smk_808445, 0x808445) {
 }
 
 /*
+ * $85:8FB8 — initialise a per-object record from a struct table. m16/x16,
+ * DB holds the data bank. X = object slot, Y = record index. Leaf.
+ *
+ *   LDA $8FF9,y / TAY            ; Y = struct pointer from table $8FF9
+ *   STZ $22,x                    ; clear slot field $22
+ *   LDA $0000,y / STA $18,x      ; copy 5 words struct -> object slots
+ *   LDA $0002,y / STA $1C,x
+ *   LDA $0004,y / STA $2A,x
+ *   LDA $0006,y / STA $92,x
+ *   LDA $0008,y / STA $44,x / RTS
+ */
+RECOMP_PATCH(smk_858FB8, 0x858FB8) {
+    uint8_t  db = g_cpu.DB;
+    uint16_t x  = (uint16_t)g_cpu.X;
+    uint16_t y  = (uint16_t)g_cpu.Y;
+
+    y = bus_read16(db, (uint16_t)(0x8FF9 + y));                 /* LDA $8FF9,y / TAY */
+    bus_wram_write16(g_cpu.DP + 0x22 + x, 0x0000);             /* STZ $22,x */
+    bus_wram_write16(g_cpu.DP + 0x18 + x, bus_read16(db, (uint16_t)(0x0000 + y)));  /* STA $18,x */
+    bus_wram_write16(g_cpu.DP + 0x1C + x, bus_read16(db, (uint16_t)(0x0002 + y)));  /* STA $1C,x */
+    bus_wram_write16(g_cpu.DP + 0x2A + x, bus_read16(db, (uint16_t)(0x0004 + y)));  /* STA $2A,x */
+    bus_wram_write16(g_cpu.DP + 0x92 + x, bus_read16(db, (uint16_t)(0x0006 + y)));  /* STA $92,x */
+    uint16_t last = bus_read16(db, (uint16_t)(0x0008 + y));
+    bus_wram_write16(g_cpu.DP + 0x44 + x, last);              /* STA $44,x */
+
+    g_cpu.Y = y;
+    g_cpu.C = last;
+}
+
+/*
  * $85:84D1 — increment the 16-bit counter at $64. Leaf.
  *   REP #$20 / INC $64 / SEP #$20 / RTS
  */
