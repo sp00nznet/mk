@@ -389,3 +389,33 @@ RECOMP_PATCH(smk_858FB8, 0x858FB8) {
     return;            /* $8FD7 RTS */
 }
 
+
+RECOMP_PATCH(smk_858B7A, 0x858B7A) {
+    { uint16_t _v = (uint16_t)(bus_read16(g_cpu.DB, 0x0048)); g_cpu.C = (uint16_t)((_v) & 0xFFFF); g_cpu.flag_N = (uint8_t)(((uint16_t)(_v) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_v) == 0); } /* $8B7A LDA */
+    if (g_cpu.flag_Z) goto L_8B80;  /* $8B7D BEQ */
+    return;            /* $8B7F RTS */
+  L_8B80:;
+    func_table_call_jsr(0x858EE9);  /* $8B80 JSR */
+    { uint16_t _v = (uint16_t)(0x1000); g_cpu.X = (uint16_t)((_v) & 0xFFFF); g_cpu.flag_N = (uint8_t)(((uint16_t)(_v) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_v) == 0); } /* $8B83 LDX */
+    { uint8_t _bk = (uint8_t)(0x00); uint16_t _ad = (uint16_t)((uint16_t)(g_cpu.DP + 0x40 + g_cpu.X)); uint16_t _t = (uint16_t)(bus_read16(_bk, _ad) + 1); bus_write16(_bk, _ad, _t); g_cpu.flag_N = (uint8_t)(((uint16_t)(_t) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_t) == 0); } /* $8B86 INC */
+    { uint16_t _v = (uint16_t)(bus_read16(0x00, (uint16_t)(g_cpu.DP + 0x40 + g_cpu.X))); g_cpu.C = (uint16_t)((_v) & 0xFFFF); g_cpu.flag_N = (uint8_t)(((uint16_t)(_v) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_v) == 0); } /* $8B88 LDA */
+    { uint16_t _a = (uint16_t)(g_cpu.C); uint16_t _v = (uint16_t)(0x00D2); uint16_t _t = (uint16_t)(_a - _v); g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); g_cpu.flag_N = (uint8_t)((_t >> 15) & 1); } /* $8B8A CMP */
+    if (g_cpu.flag_Z) goto L_8BAB;  /* $8B8D BEQ */
+    { uint16_t _a = (uint16_t)(g_cpu.C); uint16_t _v = (uint16_t)(0x01F2); uint16_t _t = (uint16_t)(_a - _v); g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); g_cpu.flag_N = (uint8_t)((_t >> 15) & 1); } /* $8B8F CMP */
+    if (g_cpu.flag_Z) goto L_8BAB;  /* $8B92 BEQ */
+    { uint16_t _a = (uint16_t)(g_cpu.C); uint16_t _v = (uint16_t)(0x0452); uint16_t _t = (uint16_t)(_a - _v); g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); g_cpu.flag_N = (uint8_t)((_t >> 15) & 1); } /* $8B94 CMP */
+    if (g_cpu.flag_Z) goto L_8BAB;  /* $8B97 BEQ */
+    { uint16_t _a = (uint16_t)(g_cpu.C); uint16_t _v = (uint16_t)(0x046A); uint16_t _t = (uint16_t)(_a - _v); g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); g_cpu.flag_N = (uint8_t)((_t >> 15) & 1); } /* $8B99 CMP */
+    if (g_cpu.flag_Z) goto L_8BAB;  /* $8B9C BEQ */
+    { uint16_t _a = (uint16_t)(g_cpu.C); uint16_t _v = (uint16_t)(0x053A); uint16_t _t = (uint16_t)(_a - _v); g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); g_cpu.flag_N = (uint8_t)((_t >> 15) & 1); } /* $8B9E CMP */
+    if (g_cpu.flag_Z) goto L_8BAB;  /* $8BA1 BEQ */
+    { uint16_t _a = (uint16_t)(g_cpu.C); uint16_t _v = (uint16_t)(0x0592); uint16_t _t = (uint16_t)(_a - _v); g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); g_cpu.flag_N = (uint8_t)((_t >> 15) & 1); } /* $8BA3 CMP */
+    if (g_cpu.flag_Z) goto L_8BAB;  /* $8BA6 BEQ */
+    func_table_call_jsr(0x858BAD); return;  /* $8BA8 JMP (tail) */
+  L_8BAB:;
+    { uint8_t _bk = (uint8_t)(0x00); uint16_t _ad = (uint16_t)((uint16_t)(g_cpu.DP + 0x42 + g_cpu.X)); uint16_t _t = (uint16_t)(bus_read16(_bk, _ad) + 1); bus_write16(_bk, _ad, _t); g_cpu.flag_N = (uint8_t)(((uint16_t)(_t) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_t) == 0); } /* $8BAB INC */
+    { uint16_t _v = (uint16_t)(bus_read16(0x00, (uint16_t)(g_cpu.DP + 0x42 + g_cpu.X))); g_cpu.C = (uint16_t)((_v) & 0xFFFF); g_cpu.flag_N = (uint8_t)(((uint16_t)(_v) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_v) == 0); } /* $8BAD LDA */
+    { uint16_t _x = (uint16_t)(g_cpu.C); uint8_t _c = (uint8_t)((_x >> 15) & 1); uint16_t _r = (uint16_t)(_x << 1); g_cpu.flag_C = _c; g_cpu.C = (uint16_t)((_r) & 0xFFFF); g_cpu.flag_N = (uint8_t)(((uint16_t)(_r) >> 15) & 1); g_cpu.flag_Z = (uint8_t)((uint16_t)(_r) == 0); } /* $8BAF ASL */
+    op_tax();                                      /* $8BB0 TAX */
+    { uint16_t _t = bus_read16(0x85, (uint16_t)(0x8BB4 + g_cpu.X)); func_table_call_jsr(((uint32_t)0x85 << 16) | _t); } return;  /* $8BB1 JMP (tail) */
+}

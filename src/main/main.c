@@ -244,7 +244,8 @@ int main(int argc, char *argv[]) {
             recomp_timed_add_intercept(0x858EE9, false);
             recomp_timed_add_intercept(0x85B945, false);
             recomp_timed_add_intercept(0x858FB8, false);   /* per-object init */
-            printf("smk: intercept 16 autogen funcs (incl. Mode-7), race-validated combined\n");
+            recomp_timed_add_intercept(0x858B7A, false);   /* anim state-machine: JMP ($8BB4,x) */
+            printf("smk: intercept 17 autogen funcs (incl. Mode-7 + indirect dispatch), race-validated\n");
         }
     }
 
