@@ -90,3 +90,37 @@ auto-generation** and hands us a concrete codegen template. Combined with our tw
 SuperRecomp/mstan lack — **trace-exact entry flags** and a **validation oracle** — a small
 auto-generator in our own toolchain (no mstan code) can automate the leaf-porting bottleneck
 while keeping LakeSnes/DSP-1/intercept/menu/netplay intact.
+
+## Built & results (2026-06)
+
+`tools/recomp/autogen.py` + `tools/recomp/batch.py` exist and work:
+
+- **autogen.py** decodes a function from ROM + trace-exact entry M/X (CFG walk, M/X
+  threaded), and emits a `RECOMP_PATCH`: register/stack/flag ops via `op_*`; loads/stores/
+  STZ/logical/compare/inc-dec/shift/BIT across all common addressing modes via inline
+  `bus_read/write` + flags; JSR/JSL via `func_table_call`; branches via labels/gotos.
+  Indirect dispatch / per-(M,X) re-entry → `Unsupported` (clean fallback).
+- **batch.py** runs autogen over a profile's `PROF <addr> <count> <P> [MULTI-MX]` lines
+  (the profiler now records each call target's entry M/X), reports yield + skip reasons.
+- **Profiled through a real race** (input script `360:Y` + mash `START` to `$36=02`, then
+  hold `B` to drive). Batch generated 26 functions; **16 validated byte-identical to the
+  emulation oracle THROUGH THE RACE** — including the **Mode-7 engine** (`$818902`,
+  `$81B9A8`) and the race object loop (`$80F90A`). Default `SMK_RECOMP=1` intercepts all 16.
+
+### Findings
+
+- **Link-anchor bug (fixed).** `smk_autogen.c` is a static-lib TU with no
+  externally-referenced symbol → the linker dropped it and its `RECOMP_PATCH` constructors
+  never ran. Always check `intercept_hits > 0` — byte-identical with zero hits is a non-test.
+- **No combined-interception count ceiling for pure-logic functions.** Initially looked like
+  a ~dozen-function ceiling, but a `SMK_RECOMP_CYCLES` sweep showed the 16 pure-logic
+  functions compose byte-identical at zero cycle-advance (adding cycles *hurts*). The real
+  exceptions are **timing-sensitive functions**: hardware-register readers (the `$4218`
+  input handler `$808445`, read-phase-dependent) and **functions called during transitions**
+  (race start `$0080:` APU-phase window, e.g. `$8181C4` at f960). Those are the instant-
+  execution ceiling (§10–11) and need cycle-accurate execution — not re-seeding. The 10
+  batch FAILs are these, not emit bugs.
+
+So the auto-generator reaches gameplay/Mode-7 code and proves it function-by-function against
+the oracle; steady-state pure-logic composes without limit, while transition/IO-timing code
+is the boundary that motivates the timed/cycle-accurate model.
