@@ -212,12 +212,11 @@ int main(int argc, char *argv[]) {
              * The boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
              * perturbs audio WRAM phase; reach it via SMK_RECOMP_INTERCEPTS. */
             /* autogen (autogen.py + batch.py), all PURE-LOGIC, gated byte-identical
-             * THROUGH A RACE (title + Mode-7 gameplay) as a combined set. All 16
-             * race-validated funcs live in smk_autogen.c and pass INDIVIDUALLY; this
-             * is the largest combined-clean default. Hardware/timing-sensitive readers
-             * (e.g. the $4218 input handler $808445) are excluded from the combined
-             * default — intercepting them compounds the instant-execution timing skew
-             * past live state. Add more via SMK_RECOMP_INTERCEPTS. */
+             * THROUGH A RACE (title + Mode-7 gameplay) as ONE combined set. Pure-logic
+             * functions compose cleanly with no count ceiling; only hardware/timing-
+             * sensitive readers (e.g. the $4218 input handler $808445, whose read phase
+             * shifts under instant execution) are excluded — add those via
+             * SMK_RECOMP_INTERCEPTS if desired. */
             recomp_timed_add_intercept(0x80F90A, false);   /* race object loop (hot) */
             recomp_timed_add_intercept(0x80A01F, false);
             recomp_timed_add_intercept(0x80A027, false);
@@ -226,7 +225,15 @@ int main(int argc, char *argv[]) {
             recomp_timed_add_intercept(0x808BBF, false);
             recomp_timed_add_intercept(0x8086A0, false);
             recomp_timed_add_intercept(0x80BBCC, false);
-            printf("smk: intercept 8 autogen funcs (incl. Mode-7), race-validated combined\n");
+            recomp_timed_add_intercept(0x80BA50, false);
+            recomp_timed_add_intercept(0x808D83, false);
+            recomp_timed_add_intercept(0x80B7EB, false);
+            recomp_timed_add_intercept(0x809EB2, false);   /* (calls $9FAC) */
+            recomp_timed_add_intercept(0x8584D1, false);   /* counter $64 */
+            recomp_timed_add_intercept(0x858EE9, false);
+            recomp_timed_add_intercept(0x85B945, false);
+            recomp_timed_add_intercept(0x858FB8, false);   /* per-object init */
+            printf("smk: intercept 16 autogen funcs (incl. Mode-7), race-validated combined\n");
         }
     }
 
