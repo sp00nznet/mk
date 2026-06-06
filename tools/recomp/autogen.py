@@ -38,8 +38,21 @@ BRANCH = {0xF0: ("Z", True), 0xD0: ("Z", False),          # BEQ BNE
           0x30: ("N", True), 0x10: ("N", False),          # BMI BPL
           0x70: ("V", True), 0x50: ("V", False)}          # BVS BVC
 UNCOND = {0x80, 0x82}                                      # BRA BRL
-CALLJMP = {0x20, 0x22, 0x4C, 0x5C, 0x6C, 0x7C, 0xDC, 0xFC}
+CALL = {0x20, 0x22}                                        # JSR JSL (fall through)
+TAILJMP = {0x4C, 0x5C}                                     # JMP JML (tail call -> return)
+INDIRECT = {0x6C, 0x7C, 0xDC, 0xFC}                        # (abs)/(abs,x)/[abs]/(dp,x) — dynamic
 MEM_MODES = {"abs", "absx", "absy", "dp", "dpx", "dpy", "long", "longx"}
+
+
+def _call_target(insn, bank):
+    """24-bit target of a JSR/JSL/JMP/JML (long modes carry their own bank)."""
+    return insn["val"] if insn["mode"] == "long" else ((bank << 16) | insn["val"])
+
+
+def _call_stmt(insn, bank):
+    t = _call_target(insn, bank)
+    fn = "func_table_call" if insn["op"] in (0x22, 0x5C) else "func_table_call_jsr"
+    return f"{fn}(0x{t:06X});"
 
 
 def _decode_at(data, bank, pc, m8, x8):
@@ -97,11 +110,10 @@ def decode_cfg(data, bank, addr, m8, x8, limit=2048):
         ins, nm, nx = _decode_at(data, bank, pc, m, x)
         insns[pc] = ins
         op = ins["op"]
-        if op in TERMINALS:
-            continue
-        if op in CALLJMP:
-            raise Unsupported(f"call/jump {ins['name']} (${op:02X}) at ${pc:04X} "
-                              f"— v2 handles branches only, not calls")
+        if op in TERMINALS or op in TAILJMP:
+            continue                                   # no in-function successor
+        if op in INDIRECT:
+            raise Unsupported(f"indirect {ins['name']} (${op:02X}) at ${pc:04X} — dynamic target")
         nxt = (pc + ins["total"]) & 0xFFFF
         if op in UNCOND:
             targets.add(ins["target"]); work.append((ins["target"], nm, nx))
@@ -109,6 +121,8 @@ def decode_cfg(data, bank, addr, m8, x8, limit=2048):
             targets.add(ins["target"])
             work.append((ins["target"], nm, nx)); work.append((nxt, nm, nx))
         else:
+            # JSR/JSL fall through (we assume the callee preserves M/X — the diff
+            # gate rejects any function where that doesn't hold).
             work.append((nxt, nm, nx))
     return insns, targets
 
@@ -151,17 +165,42 @@ def _nz(w, v):
             f"g_cpu.flag_Z = (uint8_t)((uint{w}_t)({v}) == 0);")
 
 
-def _load(insn, reg, kind):
-    w = 16 if _wide(insn, kind) else 8
+def _src(insn, w):
+    """C expression for a read operand (immediate or memory)."""
     mode, val = insn["mode"], insn["val"]
     if mode in ("imm8", "immA", "immX"):
-        src = f"0x{val:0{w // 4}X}"
-    elif mode in MEM_MODES:
+        return f"0x{val:0{w // 4}X}"
+    if mode in MEM_MODES:
         bank, addr = _ea(mode, val)
-        src = f"bus_read{w}({bank}, {addr})"
-    else:
-        raise Unsupported(f"{insn['name']} {mode}")
-    return f"{{ uint{w}_t _v = (uint{w}_t)({src}); {_reg_write(reg, w, '_v')} {_nz(w, '_v')} }}"
+        return f"bus_read{w}({bank}, {addr})"
+    raise Unsupported(f"{insn['name']} {mode}")
+
+
+def _load(insn, reg, kind):
+    w = 16 if _wide(insn, kind) else 8
+    return f"{{ uint{w}_t _v = (uint{w}_t)({_src(insn, w)}); {_reg_write(reg, w, '_v')} {_nz(w, '_v')} }}"
+
+
+def _logical(insn, c_op):  # AND/ORA/EOR: A = A <op> src; N/Z
+    w = 16 if _wide(insn, "m") else 8
+    return (f"{{ uint{w}_t _a = (uint{w}_t)({_reg_read('A', w)}); "
+            f"uint{w}_t _v = (uint{w}_t)({_src(insn, w)}); "
+            f"_a = (uint{w}_t)(_a {c_op} _v); {_reg_write('A', w, '_a')} {_nz(w, '_a')} }}")
+
+
+def _cmp(insn, reg, kind):  # CMP/CPX/CPY: flags from reg - src
+    w = 16 if _wide(insn, kind) else 8
+    return (f"{{ uint{w}_t _a = (uint{w}_t)({_reg_read(reg, w)}); "
+            f"uint{w}_t _v = (uint{w}_t)({_src(insn, w)}); uint{w}_t _t = (uint{w}_t)(_a - _v); "
+            f"g_cpu.flag_C = (uint8_t)(_a >= _v); g_cpu.flag_Z = (uint8_t)(_a == _v); "
+            f"g_cpu.flag_N = (uint8_t)((_t >> {w - 1}) & 1); }}")
+
+
+def _incdec(insn, reg, delta):  # INX/INY/DEX/DEY (X width)
+    w = 16 if _wide(insn, "x") else 8
+    sign = "+" if delta > 0 else "-"
+    return (f"{{ uint{w}_t _t = (uint{w}_t)(({_reg_read(reg, w)}) {sign} 1); "
+            f"{_reg_write(reg, w, '_t')} {_nz(w, '_t')} }}")
 
 
 def _store(insn, reg, kind):
@@ -184,6 +223,8 @@ _SIMPLE = {
 }
 _LOADS = {"LDA": ("A", "m"), "LDX": ("X", "x"), "LDY": ("Y", "x")}
 _STORES = {"STA": ("A", "m"), "STX": ("X", "x"), "STY": ("Y", "x"), "STZ": (None, "m")}
+_LOGIC = {"AND": "&", "ORA": "|", "EOR": "^"}
+_INCDEC = {"INX": ("X", +1), "INY": ("Y", +1), "DEX": ("X", -1), "DEY": ("Y", -1)}
 
 
 def emit_body(insn):
@@ -196,8 +237,22 @@ def emit_body(insn):
         return _load(insn, *_LOADS[name])
     if name in _STORES:
         return _store(insn, *_STORES[name])
+    if name in _LOGIC:
+        return _logical(insn, _LOGIC[name])
+    if name == "CMP":
+        return _cmp(insn, "A", "m")
+    if name == "CPX":
+        return _cmp(insn, "X", "x")
+    if name == "CPY":
+        return _cmp(insn, "Y", "x")
+    if name in _INCDEC:
+        return _incdec(insn, *_INCDEC[name])
     if name == "INC" and insn["mode"] == "dp":
         return f"op_inc_dp{16 if _wide(insn, 'm') else 8}(0x{insn['val']:02X});"
+    if name in ("ADC", "SBC"):
+        if insn["mode"] == "immA" and not insn["m8"]:
+            return f"op_{name.lower()}_imm16(0x{insn['val']:04X});"
+        raise Unsupported(f"{name} {insn['mode']} (only imm16 has a helper)")
     raise Unsupported(f"no emit rule for {name} {insn['mode']} (${op:02X}) at ${insn['pc']:04X}")
 
 
@@ -216,6 +271,10 @@ def generate(data, bank, addr, P, name):
         op = ins["op"]
         if op in TERMINALS:
             out.append(f"    return;            /* ${pc:04X} {ins['name']} */")
+        elif op in CALL:
+            out.append(f"    {_call_stmt(ins, bank):<46s} /* ${pc:04X} {ins['name']} ${_call_target(ins, bank):06X} */")
+        elif op in TAILJMP:
+            out.append(f"    {_call_stmt(ins, bank)} return;  /* ${pc:04X} {ins['name']} (tail) ${_call_target(ins, bank):06X} */")
         elif op in UNCOND:
             out.append(f"    goto L_{ins['target']:04X};   /* ${pc:04X} {ins['name']} */")
         elif op in BRANCH:

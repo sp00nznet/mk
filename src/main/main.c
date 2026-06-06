@@ -208,13 +208,19 @@ int main(int argc, char *argv[]) {
              * dead stack scratch differs — gate with --ignore-wram 1F00-1FFF).
              * The boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
              * perturbs audio WRAM phase; reach it via SMK_RECOMP_INTERCEPTS. */
-            recomp_timed_add_intercept(0x808445, false);   /* input edge-detect (hand) */
-            recomp_timed_add_intercept(0x8584D1, false);   /* counter $64        (autogen) */
-            recomp_timed_add_intercept(0x8181C4, false);   /* struct scatter     (autogen) */
-            recomp_timed_add_intercept(0x858FB8, false);   /* per-object init    (autogen) */
-            recomp_timed_add_intercept(0x80C279, false);   /* slot swap-store    (autogen) */
-            recomp_timed_add_intercept(0x819587, true);    /* M7 matrix + DMA, RTL (autogen) */
-            printf("smk: intercept 6 funcs (1 hand + 5 autogen), validated faithful\n");
+            recomp_timed_add_intercept(0x808445, false);   /* input edge-detect  (hand) */
+            /* autogen (tools/recomp/autogen.py + batch.py), each gated byte-identical */
+            recomp_timed_add_intercept(0x8584D1, false);   /* counter $64 */
+            recomp_timed_add_intercept(0x8181C4, false);   /* struct scatter */
+            recomp_timed_add_intercept(0x858FB8, false);   /* per-object init */
+            recomp_timed_add_intercept(0x80C279, false);   /* slot swap-store */
+            recomp_timed_add_intercept(0x809EB2, false);   /* (calls $9FAC) */
+            recomp_timed_add_intercept(0x8592F9, false);   /* (calls $9336) */
+            recomp_timed_add_intercept(0x85B945, false);
+            recomp_timed_add_intercept(0x81CBFF, false);
+            recomp_timed_add_intercept(0x819587, true);    /* M7 matrix + DMA, RTL */
+            recomp_timed_add_intercept(0x80C25A, true);    /* RTL */
+            printf("smk: intercept 11 funcs (1 hand + 10 autogen), validated faithful\n");
         }
     }
 
