@@ -868,74 +868,8 @@ RECOMP_PATCH(smk_808445, 0x808445) {
     bus_wram_write16(g_cpu.DP + 0x24 + x, CPU_A16()); /* STA $24,x (prev = cur) */
 }
 
-/*
- * $85:8FB8 — initialise a per-object record from a struct table. m16/x16,
- * DB holds the data bank. X = object slot, Y = record index. Leaf.
- *
- *   LDA $8FF9,y / TAY            ; Y = struct pointer from table $8FF9
- *   STZ $22,x                    ; clear slot field $22
- *   LDA $0000,y / STA $18,x      ; copy 5 words struct -> object slots
- *   LDA $0002,y / STA $1C,x
- *   LDA $0004,y / STA $2A,x
- *   LDA $0006,y / STA $92,x
- *   LDA $0008,y / STA $44,x / RTS
- */
-RECOMP_PATCH(smk_858FB8, 0x858FB8) {
-    uint8_t  db = g_cpu.DB;
-    uint16_t x  = (uint16_t)g_cpu.X;
-    uint16_t y  = (uint16_t)g_cpu.Y;
-
-    y = bus_read16(db, (uint16_t)(0x8FF9 + y));                 /* LDA $8FF9,y / TAY */
-    bus_wram_write16(g_cpu.DP + 0x22 + x, 0x0000);             /* STZ $22,x */
-    bus_wram_write16(g_cpu.DP + 0x18 + x, bus_read16(db, (uint16_t)(0x0000 + y)));  /* STA $18,x */
-    bus_wram_write16(g_cpu.DP + 0x1C + x, bus_read16(db, (uint16_t)(0x0002 + y)));  /* STA $1C,x */
-    bus_wram_write16(g_cpu.DP + 0x2A + x, bus_read16(db, (uint16_t)(0x0004 + y)));  /* STA $2A,x */
-    bus_wram_write16(g_cpu.DP + 0x92 + x, bus_read16(db, (uint16_t)(0x0006 + y)));  /* STA $92,x */
-    uint16_t last = bus_read16(db, (uint16_t)(0x0008 + y));
-    bus_wram_write16(g_cpu.DP + 0x44 + x, last);              /* STA $44,x */
-
-    g_cpu.Y = y;
-    g_cpu.C = last;
-}
-
-/* $85:84D1 (16-bit counter $64) is now produced by tools/recomp/autogen.py —
- * see src/recomp/smk_autogen.c. */
-
-/*
- * $81:81C4 — scatter a fixed struct from ROM table $81:81A8 into WRAM scratch.
- * m16 / x16, DB=$81 (confirmed by trace: entry P=80). Pure-logic leaf. (The
- * $81C9 entry, which selects table $81B6, is a separate call target, not here.)
- *
- *   LDY #$81A8
- *   LDX $0000,y / STX $B8 / STZ $1EF8,x / LDA $C8,x / STA $0FE0   ; all 16-bit
- *   LDX $0002,y / STX $CE
- *   LDX $0004,y / STX $CC
- *   LDX $0006,y / STX $BA
- *   LDA $0008,y / STA $0FE2 / LDA $000A,y / STA $0FE4 / LDA $000C,y / STA $0FDC / RTS
- */
-RECOMP_PATCH(smk_8181C4, 0x8181C4) {
-    uint8_t  db = g_cpu.DB;           /* =$81 — the table lives in this bank */
-    const uint16_t T = 0x81A8;        /* LDY #$81A8 (abs,Y base $0000 + Y) */
-
-    uint16_t w0 = bus_read16(db, T + 0x00);                 /* LDX $0000,y */
-    bus_wram_write16(g_cpu.DP + 0xB8, w0);                  /* STX $B8 */
-    bus_write16(db, (uint16_t)(0x1EF8 + w0), 0x0000);       /* STZ $1EF8,x (16-bit) */
-    bus_write16(db, 0x0FE0,
-                bus_read16(0x00, (uint16_t)(g_cpu.DP + 0xC8 + w0)));  /* LDA $C8,x / STA $0FE0 */
-
-    bus_wram_write16(g_cpu.DP + 0xCE, bus_read16(db, T + 0x02));    /* LDX $0002,y / STX $CE */
-    bus_wram_write16(g_cpu.DP + 0xCC, bus_read16(db, T + 0x04));    /* LDX $0004,y / STX $CC */
-    uint16_t w3 = bus_read16(db, T + 0x06);                        /* LDX $0006,y */
-    bus_wram_write16(g_cpu.DP + 0xBA, w3);                         /* STX $BA */
-
-    bus_write16(db, 0x0FE2, bus_read16(db, T + 0x08));            /* LDA $0008,y / STA $0FE2 */
-    bus_write16(db, 0x0FE4, bus_read16(db, T + 0x0A));            /* LDA $000A,y / STA $0FE4 */
-    uint16_t last = bus_read16(db, T + 0x0C);                     /* LDA $000C,y */
-    bus_write16(db, 0x0FDC, last);                               /* STA $0FDC */
-
-    g_cpu.X = w3;             /* final X (last LDX) */
-    g_cpu.C = last;          /* final A (last LDA) */
-}
+/* $85:8FB8, $85:84D1, and $81:81C4 are now produced by tools/recomp/autogen.py
+ * — see src/recomp/smk_autogen.c (each validated byte-identical to the oracle). */
 
 /*
  * $80:853D — Title screen input handler
