@@ -7,6 +7,8 @@
 /* Functions are auto-registered via RECOMP_PATCH at static-init time
  * (see <snesrecomp/recomp_patch.h>) — no central registration call needed. */
 
+void smk_autogen_link_anchor(void);  /* forces src/recomp/smk_autogen.c to link */
+
 /* === Bank $80 === */
 void smk_80FF70(void);  /* Reset vector */
 void smk_80803A(void);  /* Hardware init + main loop entry */

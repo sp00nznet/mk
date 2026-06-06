@@ -203,6 +203,64 @@ def _incdec(insn, reg, delta):  # INX/INY/DEX/DEY (X width)
             f"{_reg_write(reg, w, '_t')} {_nz(w, '_t')} }}")
 
 
+def _incdec_val(insn, delta):  # INC/DEC accumulator (imp) or memory (M width)
+    w = 16 if _wide(insn, "m") else 8
+    sign = "+" if delta > 0 else "-"
+    if insn["mode"] == "imp":
+        return (f"{{ uint{w}_t _t = (uint{w}_t)(({_reg_read('A', w)}) {sign} 1); "
+                f"{_reg_write('A', w, '_t')} {_nz(w, '_t')} }}")
+    if insn["mode"] in MEM_MODES:
+        bank, addr = _ea(insn["mode"], insn["val"])
+        return (f"{{ uint8_t _bk = (uint8_t)({bank}); uint16_t _ad = (uint16_t)({addr}); "
+                f"uint{w}_t _t = (uint{w}_t)(bus_read{w}(_bk, _ad) {sign} 1); "
+                f"bus_write{w}(_bk, _ad, _t); {_nz(w, '_t')} }}")
+    raise Unsupported(f"{insn['name']} {insn['mode']}")
+
+
+def _shift_xform(name, w):  # (carry_from_x, result_from_x[+oldC])
+    if name == "ASL": return (f"(uint8_t)((_x >> {w - 1}) & 1)", f"(uint{w}_t)(_x << 1)")
+    if name == "LSR": return ("(uint8_t)(_x & 1)", f"(uint{w}_t)(_x >> 1)")
+    if name == "ROL": return (f"(uint8_t)((_x >> {w - 1}) & 1)",
+                              f"(uint{w}_t)((_x << 1) | (g_cpu.flag_C ? 1 : 0))")
+    if name == "ROR": return ("(uint8_t)(_x & 1)",
+                              f"(uint{w}_t)((_x >> 1) | ((g_cpu.flag_C ? 1u : 0u) << {w - 1}))")
+    raise Unsupported(name)
+
+
+def _shift(insn, name):  # ASL/LSR/ROL/ROR, accumulator (imp) or memory (M width)
+    w = 16 if _wide(insn, "m") else 8
+    ce, re = _shift_xform(name, w)
+    if insn["mode"] == "imp":
+        return (f"{{ uint{w}_t _x = (uint{w}_t)({_reg_read('A', w)}); uint8_t _c = {ce}; "
+                f"uint{w}_t _r = {re}; g_cpu.flag_C = _c; {_reg_write('A', w, '_r')} {_nz(w, '_r')} }}")
+    if insn["mode"] in MEM_MODES:
+        bank, addr = _ea(insn["mode"], insn["val"])
+        return (f"{{ uint8_t _bk = (uint8_t)({bank}); uint16_t _ad = (uint16_t)({addr}); "
+                f"uint{w}_t _x = bus_read{w}(_bk, _ad); uint8_t _c = {ce}; uint{w}_t _r = {re}; "
+                f"bus_write{w}(_bk, _ad, _r); g_cpu.flag_C = _c; {_nz(w, '_r')} }}")
+    raise Unsupported(f"{name} {insn['mode']}")
+
+
+def _bit(insn):  # BIT: Z from A&M; BIT # only touches Z; BIT mem also sets N,V from M
+    w = 16 if _wide(insn, "m") else 8
+    if insn["mode"] in ("imm8", "immA"):
+        return (f"g_cpu.flag_Z = (uint8_t)(((uint{w}_t)({_reg_read('A', w)}) & "
+                f"(uint{w}_t)0x{insn['val']:0{w // 4}X}) == 0);")
+    if insn["mode"] in MEM_MODES:
+        return (f"{{ uint{w}_t _m = (uint{w}_t)({_src(insn, w)}); "
+                f"uint{w}_t _a = (uint{w}_t)({_reg_read('A', w)}); "
+                f"g_cpu.flag_Z = (uint8_t)((_a & _m) == 0); "
+                f"g_cpu.flag_N = (uint8_t)((_m >> {w - 1}) & 1); "
+                f"g_cpu.flag_V = (uint8_t)((_m >> {w - 2}) & 1); }}")
+    raise Unsupported(f"BIT {insn['mode']}")
+
+
+_FLAGOP = {"CLC": "g_cpu.flag_C = 0;", "SEC": "g_cpu.flag_C = 1;",
+           "CLI": "g_cpu.flag_I = 0;", "SEI": "g_cpu.flag_I = 1;",
+           "CLD": "g_cpu.flag_D = 0;", "SED": "g_cpu.flag_D = 1;",
+           "CLV": "g_cpu.flag_V = 0;"}
+
+
 def _store(insn, reg, kind):
     w = 16 if _wide(insn, kind) else 8
     mode, val = insn["mode"], insn["val"]
@@ -247,8 +305,18 @@ def emit_body(insn):
         return _cmp(insn, "Y", "x")
     if name in _INCDEC:
         return _incdec(insn, *_INCDEC[name])
-    if name == "INC" and insn["mode"] == "dp":
-        return f"op_inc_dp{16 if _wide(insn, 'm') else 8}(0x{insn['val']:02X});"
+    if name in _FLAGOP:
+        return _FLAGOP[name]
+    if name in ("ASL", "LSR", "ROL", "ROR"):
+        return _shift(insn, name)
+    if name == "BIT":
+        return _bit(insn)
+    if name in ("INC", "DEC"):
+        if name == "INC" and insn["mode"] == "dp":
+            return f"op_inc_dp{16 if _wide(insn, 'm') else 8}(0x{insn['val']:02X});"
+        return _incdec_val(insn, +1 if name == "INC" else -1)
+    if name == "PEA":  # push 16-bit immediate operand
+        return (f"{{ g_cpu.S--; bus_wram_write16(g_cpu.S, 0x{insn['val']:04X}); g_cpu.S--; }}")
     if name in ("ADC", "SBC"):
         if insn["mode"] == "immA" and not insn["m8"]:
             return f"op_{name.lower()}_imm16(0x{insn['val']:04X});"

@@ -129,7 +129,10 @@ int main(int argc, char *argv[]) {
     printf("\n");
 
     /* Recompiled functions are auto-registered via RECOMP_PATCH static
-     * constructors — see ext/snesrecomp/include/snesrecomp/recomp_patch.h. */
+     * constructors — see ext/snesrecomp/include/snesrecomp/recomp_patch.h.
+     * smk_autogen.c has no externally-referenced symbol, so force its TU to link
+     * (else the linker drops it and its registrations never run). */
+    smk_autogen_link_anchor();
 
     /* Force-interpret mode: run the genuine ROM for init/transitions/state
      * handlers via the LakeSnes CPU, using the recompiled frame shells only
@@ -208,19 +211,22 @@ int main(int argc, char *argv[]) {
              * dead stack scratch differs — gate with --ignore-wram 1F00-1FFF).
              * The boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
              * perturbs audio WRAM phase; reach it via SMK_RECOMP_INTERCEPTS. */
-            recomp_timed_add_intercept(0x808445, false);   /* input edge-detect  (hand) */
-            /* autogen (tools/recomp/autogen.py + batch.py), each gated byte-identical */
-            recomp_timed_add_intercept(0x8584D1, false);   /* counter $64 */
-            recomp_timed_add_intercept(0x8181C4, false);   /* struct scatter */
-            recomp_timed_add_intercept(0x858FB8, false);   /* per-object init */
-            recomp_timed_add_intercept(0x80C279, false);   /* slot swap-store */
-            recomp_timed_add_intercept(0x809EB2, false);   /* (calls $9FAC) */
-            recomp_timed_add_intercept(0x8592F9, false);   /* (calls $9336) */
-            recomp_timed_add_intercept(0x85B945, false);
-            recomp_timed_add_intercept(0x81CBFF, false);
-            recomp_timed_add_intercept(0x819587, true);    /* M7 matrix + DMA, RTL */
-            recomp_timed_add_intercept(0x80C25A, true);    /* RTL */
-            printf("smk: intercept 11 funcs (1 hand + 10 autogen), validated faithful\n");
+            /* autogen (autogen.py + batch.py), all PURE-LOGIC, gated byte-identical
+             * THROUGH A RACE (title + Mode-7 gameplay) as a combined set. All 16
+             * race-validated funcs live in smk_autogen.c and pass INDIVIDUALLY; this
+             * is the largest combined-clean default. Hardware/timing-sensitive readers
+             * (e.g. the $4218 input handler $808445) are excluded from the combined
+             * default — intercepting them compounds the instant-execution timing skew
+             * past live state. Add more via SMK_RECOMP_INTERCEPTS. */
+            recomp_timed_add_intercept(0x80F90A, false);   /* race object loop (hot) */
+            recomp_timed_add_intercept(0x80A01F, false);
+            recomp_timed_add_intercept(0x80A027, false);
+            recomp_timed_add_intercept(0x818902, false);   /* Mode-7 engine */
+            recomp_timed_add_intercept(0x81B9A8, false);   /* Mode-7 engine */
+            recomp_timed_add_intercept(0x808BBF, false);
+            recomp_timed_add_intercept(0x8086A0, false);
+            recomp_timed_add_intercept(0x80BBCC, false);
+            printf("smk: intercept 8 autogen funcs (incl. Mode-7), race-validated combined\n");
         }
     }
 
