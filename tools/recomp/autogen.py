@@ -158,6 +158,74 @@ def _wide(insn, kind):  # kind 'm' (accumulator) or 'x' (index)
     return (not insn["m8"]) if kind == "m" else (not insn["x8"])
 
 
+# --- cycle-accurate cost model (master cycles per instruction) -------------
+# Mirrors LakeSnes snes_getAccessTime (FastROM assumed, as SMK enables it).
+def _access_time(bank, addr):
+    b, a = bank & 0xFF, addr & 0xFFFF
+    if (b < 0x40 or (0x80 <= b < 0xC0)) and a < 0x8000:
+        if a < 0x2000 or a >= 0x6000:
+            return 8          # WRAM-low / $6000-7FFF
+        if a < 0x4000 or a >= 0x4200:
+            return 6          # PPU/APU regs
+        return 12             # $4000-41FF (joypad)
+    return 6 if b >= 0x80 else 8   # ROM (FastROM bank >= $80 -> 6)
+
+# Estimated access time of a data operand, from its addressing mode + the
+# static operand (the runtime data bank isn't known, so dp/abs/index are
+# treated as WRAM/IO by their offset — the dominant case in SMK game logic).
+def _data_time(insn):
+    mode, val = insn["mode"], insn["val"]
+    if mode in ("dp", "dpx", "dpy"):
+        return _access_time(0x00, val & 0xFF)          # direct page -> bank 0
+    if mode in ("abs", "absx", "absy"):
+        return _access_time(0x00, val)                  # DB assumed WRAM/IO bank
+    if mode in ("long", "longx"):
+        return _access_time((val >> 16) & 0xFF, val & 0xFFFF)
+    return 8
+
+# data operand byte count (0 for imm/imp/branches), and whether the op is RMW.
+_READ = {"LDA", "LDX", "LDY", "AND", "ORA", "EOR", "ADC", "SBC", "CMP", "CPX", "CPY", "BIT"}
+_WRITE = {"STA", "STX", "STY", "STZ"}
+_RMW = {"INC", "DEC", "ASL", "LSR", "ROL", "ROR"}
+_IDLE1 = {"TAX", "TAY", "TXA", "TYA", "TSX", "TXS", "TXY", "TYX", "TCD", "TDC", "TCS", "TSC",
+          "INX", "INY", "DEX", "DEY", "CLC", "SEC", "CLI", "SEI", "CLD", "SED", "CLV",
+          "XCE", "NOP", "REP", "SEP"}
+
+
+def _instr_cycles(insn, bank):
+    """Best-effort master-cycle cost: fetch + data access + internal idles."""
+    op, name, mode = insn["op"], insn["name"], insn["mode"]
+    pbt = _access_time(bank, insn["pc"])               # program-bank fetch time
+    cyc = insn["total"] * pbt                          # opcode + operand fetches
+    mem = mode in MEM_MODES
+    if mem:
+        w = 2 if _wide(insn, "x" if name in ("LDX", "LDY", "STX", "STY", "CPX", "CPY") else "m") else 1
+        dt = _data_time(insn)
+        if name in _READ or name == "BIT":
+            cyc += w * dt
+        elif name in _WRITE:
+            cyc += w * dt
+        elif name in _RMW:
+            cyc += 2 * w * dt + 6                       # read + write + 1 modify idle
+    if name in _IDLE1:
+        cyc += 6
+    elif name == "XBA":
+        cyc += 12
+    elif name in _RMW and mode == "imp":               # accumulator RMW
+        cyc += 6
+    elif op in (0x20, 0xFC):                            # JSR / JSR(abs,x)
+        cyc += 6 + 2 * 8                                # 1 idle + 2 stack writes
+    elif op == 0x22:                                   # JSL
+        cyc += 6 + 3 * 8
+    elif op in (0x60, 0x6B):                            # RTS / RTL
+        cyc += 18                                       # ~3 internal + stack reads
+    elif name in ("PHA", "PHX", "PHY", "PHB", "PHP", "PHK", "PHD"):
+        cyc += 6 + 8                                    # 1 idle + 1 stack write
+    elif name in ("PLA", "PLX", "PLY", "PLB", "PLP", "PLD"):
+        cyc += 12 + 8                                   # 2 idle + 1 stack read
+    return cyc
+
+
 def _reg_write(reg, w, v):
     if reg == "A":
         return (f"g_cpu.C = (uint16_t)(({v}) & 0xFFFF);" if w == 16
@@ -350,6 +418,7 @@ def generate(data, bank, addr, P, name):
         if pc in targets:
             out.append(f"  L_{pc:04X}:;")
         op = ins["op"]
+        out.append(f"    recomp_tick({_instr_cycles(ins, bank)});")  # cycle-accurate (no-op unless enabled)
         if op in TERMINALS:
             out.append(f"    return;            /* ${pc:04X} {ins['name']} */")
         elif op in CALL:
