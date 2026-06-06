@@ -898,15 +898,8 @@ RECOMP_PATCH(smk_858FB8, 0x858FB8) {
     g_cpu.C = last;
 }
 
-/*
- * $85:84D1 — increment the 16-bit counter at $64. Leaf.
- *   REP #$20 / INC $64 / SEP #$20 / RTS
- */
-RECOMP_PATCH(smk_8584D1, 0x8584D1) {
-    op_rep(0x20);            /* 16-bit A */
-    op_inc_dp16(0x64);       /* INC $64 (16-bit) */
-    op_sep(0x20);            /* 8-bit A */
-}
+/* $85:84D1 (16-bit counter $64) is now produced by tools/recomp/autogen.py —
+ * see src/recomp/smk_autogen.c. */
 
 /*
  * $81:81C4 — scatter a fixed struct from ROM table $81:81A8 into WRAM scratch.

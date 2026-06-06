@@ -21,6 +21,7 @@ add_library(smk_game STATIC
     src/recomp/smk_boot.c
     src/recomp/smk_init.c
     src/recomp/smk_title.c
+    src/recomp/smk_autogen.c
 )
 target_link_libraries(smk_game PUBLIC snesrecomp)
 
