@@ -52,11 +52,13 @@ static int script_button_index(const char *name) {
     return -1;
 }
 
-#define SCRIPT_MAX 32
-static struct { int frame; int btn; } s_script[SCRIPT_MAX];
+#define SCRIPT_MAX 64
+static struct { int frame; int end; int btn; } s_script[SCRIPT_MAX];
 static int s_script_n = 0;
 #define SCRIPT_HOLD 4
 
+/* Tokens are "frame:BTN" (a single ~SCRIPT_HOLD-frame press) or "a-b:BTN" (hold
+ * BTN from frame a through b — e.g. "1050-1750:B" to drive forward). */
 static void parse_script(void) {
     const char *s = getenv("SMK_SCRIPT");
     if (!s) return;
@@ -66,11 +68,21 @@ static void parse_script(void) {
     char *tok = strtok(buf, ",");
     while (tok && s_script_n < SCRIPT_MAX) {
         char name[32];
-        int frame;
-        if (sscanf(tok, "%d:%31s", &frame, name) == 2) {
+        int frame, endf;
+        if (sscanf(tok, "%d-%d:%31s", &frame, &endf, name) == 3) {
             int b = script_button_index(name);
             if (b >= 0) {
                 s_script[s_script_n].frame = frame;
+                s_script[s_script_n].end = endf;
+                s_script[s_script_n].btn = b;
+                s_script_n++;
+                printf("smk: scripted hold frame %d-%d -> %s\n", frame, endf, name);
+            }
+        } else if (sscanf(tok, "%d:%31s", &frame, name) == 2) {
+            int b = script_button_index(name);
+            if (b >= 0) {
+                s_script[s_script_n].frame = frame;
+                s_script[s_script_n].end = frame + SCRIPT_HOLD - 1;
                 s_script[s_script_n].btn = b;
                 s_script_n++;
                 printf("smk: scripted input frame %d -> %s\n", frame, name);
@@ -93,8 +105,7 @@ static void apply_script(int frame) {
      * earlier active one. */
     int held[12] = {0};
     for (int i = 0; i < s_script_n; i++) {
-        if (frame >= s_script[i].frame &&
-            frame < s_script[i].frame + SCRIPT_HOLD) {
+        if (frame >= s_script[i].frame && frame <= s_script[i].end) {
             held[s_script[i].btn] = 1;
         }
     }
