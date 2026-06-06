@@ -38,21 +38,36 @@ BRANCH = {0xF0: ("Z", True), 0xD0: ("Z", False),          # BEQ BNE
           0x30: ("N", True), 0x10: ("N", False),          # BMI BPL
           0x70: ("V", True), 0x50: ("V", False)}          # BVS BVC
 UNCOND = {0x80, 0x82}                                      # BRA BRL
-CALL = {0x20, 0x22}                                        # JSR JSL (fall through)
-TAILJMP = {0x4C, 0x5C}                                     # JMP JML (tail call -> return)
-INDIRECT = {0x6C, 0x7C, 0xDC, 0xFC}                        # (abs)/(abs,x)/[abs]/(dp,x) — dynamic
+CALL = {0x20, 0x22, 0xFC}                                  # JSR/JSL/JSR(abs,x) — fall through
+TAILJMP = {0x4C, 0x5C, 0x6C, 0x7C, 0xDC}                   # JMP/JML/(ind)/(abs,x)/[abs] — terminal
 MEM_MODES = {"abs", "absx", "absy", "dp", "dpx", "dpy", "long", "longx"}
 
 
 def _call_target(insn, bank):
-    """24-bit target of a JSR/JSL/JMP/JML (long modes carry their own bank)."""
+    """24-bit target of a direct JSR/JSL/JMP/JML (long modes carry their own bank)."""
     return insn["val"] if insn["mode"] == "long" else ((bank << 16) | insn["val"])
 
 
-def _call_stmt(insn, bank):
-    t = _call_target(insn, bank)
-    fn = "func_table_call" if insn["op"] in (0x22, 0x5C) else "func_table_call_jsr"
-    return f"{fn}(0x{t:06X});"
+def _transfer_stmt(insn, bank):
+    """C statement for a call/jump — direct via a constant target, indirect via a
+    runtime func_table_call after reading the target from the jump table."""
+    op, val = insn["op"], insn["val"]
+    if op in (0x20, 0x22, 0x4C, 0x5C):                     # direct
+        t = _call_target(insn, bank)
+        fn = "func_table_call" if op in (0x22, 0x5C) else "func_table_call_jsr"
+        return f"{fn}(0x{t:06X});"
+    if op in (0xFC, 0x7C):                                 # (abs,x): target = PB:[abs+X]
+        return (f"{{ uint16_t _t = bus_read16(0x{bank:02X}, (uint16_t)(0x{val:04X} + g_cpu.X)); "
+                f"func_table_call_jsr(((uint32_t)0x{bank:02X} << 16) | _t); }}")
+    if op == 0x6C:                                         # (abs): target = $00:[abs]
+        return (f"{{ uint16_t _t = bus_read16(0x00, 0x{val:04X}); "
+                f"func_table_call_jsr(((uint32_t)0x{bank:02X} << 16) | _t); }}")
+    if op == 0xDC:                                         # [abs]: 24-bit target = $00:[abs]
+        return (f"{{ uint32_t _t = (uint32_t)bus_read8(0x00, 0x{val:04X}) | "
+                f"((uint32_t)bus_read8(0x00, 0x{(val + 1) & 0xFFFF:04X}) << 8) | "
+                f"((uint32_t)bus_read8(0x00, 0x{(val + 2) & 0xFFFF:04X}) << 16); "
+                f"func_table_call(_t); }}")
+    raise Unsupported(f"transfer ${op:02X}")
 
 
 def _decode_at(data, bank, pc, m8, x8):
@@ -112,8 +127,6 @@ def decode_cfg(data, bank, addr, m8, x8, limit=2048):
         op = ins["op"]
         if op in TERMINALS or op in TAILJMP:
             continue                                   # no in-function successor
-        if op in INDIRECT:
-            raise Unsupported(f"indirect {ins['name']} (${op:02X}) at ${pc:04X} — dynamic target")
         nxt = (pc + ins["total"]) & 0xFFFF
         if op in UNCOND:
             targets.add(ins["target"]); work.append((ins["target"], nm, nx))
@@ -340,9 +353,9 @@ def generate(data, bank, addr, P, name):
         if op in TERMINALS:
             out.append(f"    return;            /* ${pc:04X} {ins['name']} */")
         elif op in CALL:
-            out.append(f"    {_call_stmt(ins, bank):<46s} /* ${pc:04X} {ins['name']} ${_call_target(ins, bank):06X} */")
+            out.append(f"    {_transfer_stmt(ins, bank)}  /* ${pc:04X} {ins['name']} */")
         elif op in TAILJMP:
-            out.append(f"    {_call_stmt(ins, bank)} return;  /* ${pc:04X} {ins['name']} (tail) ${_call_target(ins, bank):06X} */")
+            out.append(f"    {_transfer_stmt(ins, bank)} return;  /* ${pc:04X} {ins['name']} (tail) */")
         elif op in UNCOND:
             out.append(f"    goto L_{ins['target']:04X};   /* ${pc:04X} {ins['name']} */")
         elif op in BRANCH:
