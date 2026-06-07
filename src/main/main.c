@@ -245,8 +245,12 @@ int main(int argc, char *argv[]) {
             recomp_timed_add_intercept(0x85B945, false);
             recomp_timed_add_intercept(0x858FB8, false);   /* per-object init */
             recomp_timed_add_intercept(0x858B7A, false);   /* anim state-machine: JMP ($8BB4,x) */
-            recomp_timed_add_intercept(0x8181C4, false);   /* race-start transition (needs cycle-accurate) */
-            printf("smk: intercept 18 autogen funcs (Mode-7 + indirect + transition), race-validated\n");
+            recomp_timed_add_intercept(0x8181C4, false);   /* race-start transition (cycle-accurate) */
+            recomp_timed_add_intercept(0x8592F9, false);   /* cycle-accurate rescue */
+            /* ($80C25A also rescues individually but the approximate cost model's
+             * accumulated error trips combined sets >~19; add via SMK_RECOMP_INTERCEPTS
+             * — exact per-instruction costs would lift this.) */
+            printf("smk: intercept 19 autogen funcs (Mode-7 + indirect + transitions), race-validated\n");
         }
     }
 
