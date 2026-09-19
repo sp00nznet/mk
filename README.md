@@ -4,6 +4,13 @@ Static recompilation of **Super Mario Kart** (SNES, 1992) from WDC 65C816 assemb
 
 Part of the [sp00nznet](https://github.com/sp00nznet) recompilation portfolio. This is the first SNES (65816 CPU) target in the series.
 
+> **Contribution branch note:** `contrib/recompiler-correctness` is an experimental fork branch
+> focused on generator coverage, deterministic ROM-oracle validation, and exact timed native C
+> execution. It is **not yet a complete C recompile**: the default playable path still executes a
+> user-supplied ROM through LakeSnes. See
+> [`docs/contribution_status.md`](docs/contribution_status.md) for the exact scope, reproducible
+> validation commands, current results, and remaining work.
+
 ## Status
 
 **Playable end-to-end.** A cold boot walks the authentic flow from controller input —
@@ -60,6 +67,48 @@ A Dear ImGui menu bar (File / Graphics / Sound / Controller / Multiplayer / Help
 - Netplay polish: rollback / over-the-wire desync detection; "drop straight into 2-player on connect"
 - More recompiled functions (the long-term goal: replace real-frame with recompiled C)
 
+### Recent (September 2026)
+
+- **Two more readable binary reconstructions**: vector direction (`81F638` and
+  eight branches) and direction from a packed grid-cell center (`81FD22`).
+  Direct ROM tests pass 6,489,603 vector and 1,572,864 cell cases. These are
+  semantic APIs, not replacements for bus-timed game execution. See
+  [derivation and evidence](docs/binary_direction.md) and the
+  [ongoing recovery log](docs/binary_recovery_log.md).
+- **Readable algorithm recovered from ROM**: `smk_mix_word` reconstructs `$81:BB70`
+  as compact C, including its unusual separate return value/state and final flags.
+  All 65,536 inputs pass against actual ROM CPU execution under two initial flag
+  patterns (131,072 cases). The timed generated body remains in use for game execution.
+  See [derivation and exhaustive test](docs/binary_word_mix.md).
+- **Coverage-first expansion**: 85 registered C entries, including 37 generated functions.
+  Four new roots (`81F722`, `81FD22`, `8087D9`, `80879A`) execute 9,220 interceptions
+  together and match all 140 raw snapshots of the 1,400-frame route. The 22-root `coverage`
+  preset executes 21,014 interceptions (legacy default: 11,794), matching outside the
+  legacy dead-stack exclusion. These counts are not whole-game completion percentages.
+- Run `python tools/recomp/validate_route.py` for the strict new-root gate, or
+  `python tools/recomp/validate_route.py --intercepts coverage --ignore-dead-stack`
+  for the expanded combined gate. Both run a fresh ROM oracle and save local evidence.
+  See [the related-project review and plan](docs/related_projects_and_coverage_plan.md).
+
+### Earlier (August 2026)
+- **Measured full-C baseline and roadmap** — the standard 1,400-frame route reaches 361 direct
+  call targets. 81 C entries are registered (32 auto-generated), but only the strict 18-function
+  combined set is default oracle-gated; see [`docs/recompilation_roadmap.md`](docs/recompilation_roadmap.md).
+- **Generator arithmetic expansion** — added runtime-decimal-correct 8/16-bit ADC/SBC for
+  existing memory modes plus NOP. This unlocks several high-frequency math routines; the
+  `$81:F638` indirect-call closure is retained as an exact-timing regression rather than being
+  prematurely default-enabled.
+- **Auto-recompiler correctness pass** — fixed mid-function entries whose CFG branches into
+  lower-address shared blocks; added M/X-width-correct register stack operations, PHK/PHD/PLD,
+  TSB/TRB, and the remaining register transfers, with focused Python regression tests.
+- **Two more race-path functions recompiled** — `$80:8EED` (backward/shared CFG) and `$81:BB70`
+  (hot RTL bit-mixing leaf). The default 18-function timed-recomp set completed a scripted
+  1,400-frame title → menus → race → driving run with 11,794 native interceptions and
+  byte-identical WRAM/VRAM/CGRAM snapshots versus the ROM interpreter outside the documented
+  dead stack-scratch range `$1F00-$1FFF`.
+- Transition-sensitive `$80:9EB2`, `$81:81C4`, and `$85:92F9` remain generated but opt-in;
+  the default set no longer claims them as oracle-safe.
+
 ### Recent (June 2026)
 - **Cracked the menu→race flow** — root-caused the long-standing menu blocker to a power-on
   WRAM fill (`$2E` game-mode read as 2-player on a zero-filled RAM); fixed with a `0x55` fill
@@ -80,7 +129,7 @@ A Dear ImGui menu bar (File / Graphics / Sound / Controller / Multiplayer / Help
 ┌─────────────────────────────────────────────────┐
 │                 smk_launcher                      │
 │  ┌──────────────────────────────────────────┐    │
-│  │  src/recomp/ — 48 Recompiled functions   │    │
+│  │  src/recomp/ — 81 registered C entries   │    │
 │  │  smk_boot.c  — NMI, state machine, input │    │
 │  │  smk_init.c  — Init, transition dispatch │    │
 │  │  smk_title.c — Decompressor, PPU, menus  │    │
@@ -151,7 +200,7 @@ The menu auto-disables in headless/scripted runs (`SMK_HEADLESS`/`SMK_SCRIPT`).
 ### Prerequisites
 - CMake 3.16+
 - Visual Studio 2022 (MSVC)
-- SDL2 via vcpkg: `vcpkg install sdl2:x64-windows`
+- vcpkg (SDL2 is declared and version-locked by `vcpkg.json`)
 - Python 3.10+ (for disassembler and analysis tools)
 
 ### Build
@@ -163,11 +212,21 @@ cmake -B build -G "Visual Studio 17 2022" -A x64 \
 cmake --build build --config Debug
 ```
 
+Run the auto-recompiler regression tests with:
+
+```bash
+python -m unittest tools/recomp/test_autogen.py -v
+```
+
 ### Run
 
 ```bash
 build/Debug/smk_launcher.exe
 ```
+
+When no ROM argument is supplied, the launcher searches its current/executable directory and
+up to two parent directories. This allows a Release/Debug executable to be double-clicked while
+the legally supplied ROM remains at the repository root. An explicit ROM path is still accepted.
 
 The ROM file is not included — supply your own US v1.0 copy (MD5: `7f25ce5a283d902694c52fb1152fa61a`).
 
@@ -181,6 +240,41 @@ For recompilation development, use the recompiled-shell path:
 ```bash
 SMK_SHELLS=1 build/Debug/smk_launcher.exe           # recompiled per-frame shells
 ```
+
+Set `SMK_RECOMP_PROFILE=1` to rank direct call targets. The default report shows 40 rows;
+`SMK_RECOMP_PROFILE_TOP=1000` exports the complete observed set. Targets seen under more than
+one accumulator/index width include an exact `VARIANTS=...` list for safe CFG generation.
+
+Timed native validation can replace selected ROM routines while retaining LakeSnes's real frame
+loop. When validating a complete generated call closure, disable interpreter force explicitly;
+otherwise registered children are intentionally routed through the untimed diagnostic fallback:
+
+```bash
+SMK_RECOMP=1 SMK_INTERP=0 SMK_RECOMP_BUSPHASE=1 SMK_RECOMP_PHASE_YIELD=1 \
+SMK_RECOMP_INTERCEPTS=81F638:L build/Debug/smk_launcher.exe
+```
+
+`$81:F638` and its eight indirect JSR targets are the first exact-timing closure gated this way:
+2,715 interceptions match the 1,400-frame WRAM/VRAM/CGRAM oracle at all 140 sampled frames. The
+generated call-frame token preserves caller SP/PB, prevents interpreter fallback from pushing a
+second return frame, and suspends the timed hook while fallback executes. The bus-phase/yield path
+is still opt-in. Its generated immediate, data, implied, branch, RMW, stack, call, and return
+paths now use LakeSnes-style `checkInt` micro-phases. MVN/MVP now execute one hardware-style
+iteration at a time (including opcode refetch, read/write, idle/check/idle, and resumable PC),
+and RTI restores P/PC/PB in LakeSnes pull/check order. These three opcodes have focused generator
+coverage but do not occur in the current 37-function generated set, so they still need a ROM-level
+closure gate. Generated memory modes now also place LakeSnes's dynamic DP-low, DP-index,
+absolute-index page/write/width, and stack-relative idle penalties before the correct pointer or
+data access. The generated `$80:946E` OAM-DMA leaf now drives LakeSnes one bus phase at a time:
+1,071 interceptions match all 140 raw snapshots of the 1,400-frame oracle. Because those bus
+accesses call LakeSnes directly, its DMA stall state machine and open-bus updates are preserved;
+the legacy aggregate path remains approximate, and internal bus latches are not part of the
+snapshot format. JSL and
+`JSR (abs,X)` now also preserve their non-linear operand/stack fetch order. The newly generated
+`$81:FD22` calls the `$81:F638` C closure through JSL and passes 2,684 root interceptions with
+all 140 raw snapshots matching, providing a ROM gate for this cross-bank call path.
+All five JMP/JML tail forms now have ordered bus-phase emission, with local decoded targets kept
+inside the C CFG; indirect-tail closures still need isolated ROM-level timing gates.
 
 ## Decompressor
 
@@ -212,7 +306,9 @@ Commands `$E0`–`$FE` use extended 10-bit counts: 1 data byte + cmd bits 0-1 as
 │                        mp_session.c      — generic SNES lockstep netplay (TCP)
 │                        third_party/imgui — vendored Dear ImGui
 ├── docs/
-│   └── smk_flow_re.md  reverse-engineering of the menu→race flow
+│   ├── contribution_status.md  public status and reproducible validation for this branch
+│   ├── recompilation_roadmap.md staged plan toward complete C ownership
+│   └── smk_flow_re.md           reverse-engineering of the menu→race flow
 └── tools/
     ├── disasm/        65816 disassembler (M/X flag tracking, all addressing modes)
     ├── bizhawk/       headless BizHawk + snes9x-core ground-truth harness

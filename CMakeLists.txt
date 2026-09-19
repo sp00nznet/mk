@@ -22,6 +22,8 @@ add_library(smk_game STATIC
     src/recomp/smk_init.c
     src/recomp/smk_title.c
     src/recomp/smk_autogen.c
+    src/recomp/smk_algorithms.c
+    src/recomp/smk_semantic_verify.c
 )
 target_link_libraries(smk_game PUBLIC snesrecomp)
 
@@ -46,3 +48,25 @@ target_link_libraries(oam_dumper PRIVATE lakesnes_hw)
 add_executable(lakesnes_ref tools/lakesnes_ref.c)
 target_include_directories(lakesnes_ref PRIVATE ext/snesrecomp/ext/LakeSnes)
 target_link_libraries(lakesnes_ref PRIVATE lakesnes_hw)
+
+# Exhaustive semantic reconstruction gate; the ROM stays user-supplied.
+add_executable(test_word_mix tools/test_word_mix.c src/recomp/smk_algorithms.c)
+target_include_directories(test_word_mix PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(test_word_mix PRIVATE lakesnes_hw)
+
+add_executable(test_vector_direction tools/test_vector_direction.c src/recomp/smk_algorithms.c)
+target_include_directories(test_vector_direction PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(test_vector_direction PRIVATE lakesnes_hw)
+
+add_executable(test_projection tools/test_projection.c src/recomp/smk_algorithms.c)
+target_include_directories(test_projection PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(test_projection PRIVATE lakesnes_hw)
+
+add_executable(test_object_order tools/test_object_order.c src/recomp/smk_algorithms.c)
+target_include_directories(test_object_order PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(test_object_order PRIVATE lakesnes_hw)
+
+add_executable(test_tile_dma tools/test_tile_dma.c src/recomp/smk_algorithms.c)
+target_include_directories(test_tile_dma PRIVATE ext/snesrecomp/ext/LakeSnes)
+target_link_libraries(test_tile_dma PRIVATE lakesnes_hw)
+

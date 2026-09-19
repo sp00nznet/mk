@@ -209,6 +209,17 @@ recompiled function plugged into the timed loop reproduces the oracle bit-for-bi
 dozens of frames. The remaining work is fidelity (faithful bodies + APU/sub-frame
 timing for hardware-touching routines) and breadth — exactly Phase 3.
 
+**Update (2026-08-24) — the `$80:946E` limitation is closed in bus-phase mode.** The
+hand-written, whole-routine approximation above has been replaced by generated code whose
+opcode fetches, register writes, DMA trigger, following instruction fetches, and return all
+advance LakeSnes in their original order. In particular, the opcode fetch after `STA $420B`
+arms LakeSnes's deferred DMA state and the following operand fetch allows the transfer to stall
+the CPU before `REP` executes. With `SMK_INTERP=0`, bus phases and phase yielding enabled, the
+focused closure now executes 1,071 times and matches all 140 raw WRAM/VRAM/CGRAM snapshots of
+the 1,400-frame oracle. This supersedes the historical 86-frame result for this routine; it does
+not make the non-bus-phase aggregate path cycle exact, nor do these snapshots directly expose
+the internal open-bus or DMA latch values.
+
 ## 11. Phase-3 — first faithful function + the workflow (2026-06)
 
 Tooling added to make Phase 3 repeatable:

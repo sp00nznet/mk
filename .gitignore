@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+build-manifest/
 out/
 *.exe
 *.obj

@@ -4,7 +4,8 @@ batch.py — run autogen.py over a profile's call targets and report the yield.
 
 Reads `PROF <addr> <count> <P> [MULTI-MX] [recompiled]` lines (from
 SMK_RECOMP_PROFILE=1 stderr) and tries to auto-generate each not-yet-recompiled,
-single-(M,X) target. Prints the generated functions for the successes and a
+target. MULTI-MX entries are generated with live-flag entry dispatch. Prints
+the generated functions for the successes and a
 summary of why the rest were skipped — the throughput view of the auto-generator.
 
 Usage:
@@ -24,7 +25,11 @@ def main():
     out_path = sys.argv[3] if len(sys.argv) > 3 else None
 
     cands, skipped = [], collections.Counter()
-    for line in open(prof):
+    # Launcher logs may contain UTF-8 status text before the ASCII PROF rows.
+    # Do not let the host's legacy Windows code page make profiling unusable.
+    profile_stream = (sys.stdin if prof == "-" else
+                      open(prof, encoding="utf-8", errors="replace"))
+    for line in profile_stream:
         f = line.split()
         if not f or f[0] != "PROF":
             continue
@@ -33,12 +38,13 @@ def main():
         if "recompiled" in rest:
             skipped["already recompiled"] += 1
             continue
-        if "MULTI-MX" in rest:
-            skipped["multi-(M,X) entry"] += 1
-            continue
-        cands.append((addr, count, P))
+        variant = next((s.split("=", 1)[1] for s in f[4:]
+                        if s.startswith("VARIANTS=")), None)
+        cands.append((addr, count, variant or ("multi" if "MULTI-MX" in rest else P)))
+    if profile_stream is not sys.stdin:
+        profile_stream.close()
 
-    gen, fails = [], collections.Counter()
+    gen, fails, fail_rows = [], collections.Counter(), []
     for addr, count, P in cands:
         loc = f"{addr[:2]}:{addr[2:]}"
         name = f"smk_{addr}"
@@ -51,6 +57,7 @@ def main():
             # bucket by the leading phrase
             key = reason.split(" at ")[0].split(" (")[0]
             fails[key] += 1
+            fail_rows.append((addr, count, P, reason))
 
     gen.sort(key=lambda t: -t[1])
     print(f"# candidates: {len(cands)}   generated: {len(gen)}   unsupported: {len(cands) - len(gen)}",
@@ -59,12 +66,16 @@ def main():
     print("# unsupported reasons:", file=sys.stderr)
     for k, v in fails.most_common():
         print(f"#   {v:3d}  {k}", file=sys.stderr)
+    if fail_rows:
+        print("# unsupported targets:", file=sys.stderr)
+        for addr, count, P, reason in sorted(fail_rows, key=lambda row: -row[1]):
+            print(f"#   {addr}  x{count}  P={P}: {reason}", file=sys.stderr)
     print("# generated (addr / call-count):", file=sys.stderr)
     for addr, count, _ in gen:
         print(f"#   {addr}  x{count}", file=sys.stderr)
 
     if out_path:
-        with open(out_path, "w") as f:
+        with open(out_path, "w", encoding="utf-8", newline="\n") as f:
             f.write("/* batch-autogen output — validate each via the diff harness. */\n")
             for _, _, body in gen:
                 f.write(body + "\n\n")

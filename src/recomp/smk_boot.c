@@ -600,36 +600,9 @@ RECOMP_PATCH(smk_80B181, 0x80B181) {
  *   LDA #$01 / STA $420B                ; trigger DMA ch0
  *   REP #$30 / RTS
  */
-RECOMP_PATCH(smk_80946E, 0x80946E) {
-    uint8_t saved_db = g_cpu.DB;
-    OP_SET_DB(0x80);
-
-    op_sep(0x30);
-
-    /* DMA source = $00:0200 */
-    op_stz_abs8(0x4302);        /* src low = $00 */
-    op_lda_imm8(0x02);
-    op_sta_abs8(0x4303);        /* src high = $02 */
-    op_stz_abs8(0x4304);        /* src bank = $00 */
-
-    /* OAM address = 0 */
-    op_stz_abs8(0x2102);
-    op_stz_abs8(0x2103);
-
-    /* DMA channel 0 setup */
-    op_stz_abs8(0x4300);        /* ctrl = $00 (1-byte transfer, A→B) */
-    op_lda_imm8(0x04);
-    op_sta_abs8(0x4301);        /* B-bus dest = $2104 (OAMDATA) */
-    op_lda_imm8(0x20);
-    op_sta_abs8(0x4305);        /* size low = $20 */
-    op_lda_imm8(0x02);
-    op_sta_abs8(0x4306);        /* size high = $02 → total $0220 */
-    op_lda_imm8(0x01);
-    op_sta_abs8(0x420B);        /* trigger DMA channel 0 */
-
-    op_rep(0x30);
-    g_cpu.DB = saved_db;
-}
+/* The executable body is generated into smk_autogen.c. Keeping this source
+ * description next to the shell-era callers documents the hardware role while
+ * avoiding the old instant, whole-routine DMA approximation. */
 
 /*
  * $85:809B — BG scroll write + HDMA trigger
