@@ -9,6 +9,7 @@
 #include <snesrecomp/menu_overlay.h>
 #include <snesrecomp/mp_session.h>
 #include "smk/functions.h"
+#include "smk/semantic_verify.h"
 
 #define SMK_STATE_PATH "smk_state.sav"
 
@@ -21,9 +22,52 @@ extern struct Snes *snesrecomp_get_snes(void);
 void snes_setButtonState(struct Snes *snes, int player, int button, bool pressed);
 void snes_doAutoJoypad(struct Snes *snes);
 
+#define SMK_ROM_FILENAME "Super Mario Kart (USA).sfc"
+
+static bool file_exists(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
 static const char *find_rom_path(int argc, char *argv[]) {
     if (argc >= 2) return argv[1];
-    return "Super Mario Kart (USA).sfc";
+
+    /* A double-click starts the executable from its configuration directory
+     * (for example build-manifest/Release), while the locally supplied ROM is
+     * normally kept at the repository root.  Search both the working directory
+     * and locations relative to argv[0], without copying the ROM into a build. */
+    static const char *cwd_candidates[] = {
+        SMK_ROM_FILENAME,
+        "../" SMK_ROM_FILENAME,
+        "../../" SMK_ROM_FILENAME,
+    };
+    for (size_t i = 0; i < sizeof(cwd_candidates) / sizeof(cwd_candidates[0]); i++) {
+        if (file_exists(cwd_candidates[i])) return cwd_candidates[i];
+    }
+
+    static char path[1024];
+    char exe_dir[1024];
+    if (argv[0] && strlen(argv[0]) < sizeof(exe_dir)) {
+        strcpy(exe_dir, argv[0]);
+        char *slash = strrchr(exe_dir, '/');
+        char *backslash = strrchr(exe_dir, '\\');
+        if (!slash || (backslash && backslash > slash)) slash = backslash;
+        if (slash) {
+            *slash = '\0';
+            static const char *relative_dirs[] = { "", "/..", "/../.." };
+            for (size_t i = 0; i < sizeof(relative_dirs) / sizeof(relative_dirs[0]); i++) {
+                int n = snprintf(path, sizeof(path), "%s%s/%s",
+                                 exe_dir, relative_dirs[i], SMK_ROM_FILENAME);
+                if (n > 0 && (size_t)n < sizeof(path) && file_exists(path)) return path;
+            }
+        }
+    }
+
+    /* Preserve the useful filename in the existing load error if no candidate
+     * exists.  An explicit path can always be supplied as argv[1]. */
+    return SMK_ROM_FILENAME;
 }
 
 /*
@@ -178,6 +222,13 @@ int main(int argc, char *argv[]) {
     bool recomp  = (getenv("SMK_RECOMP") != NULL);
     bool profile = (getenv("SMK_RECOMP_PROFILE") != NULL);
     if (recomp || profile) realframe = true;
+    const char *busphase = getenv("SMK_RECOMP_BUSPHASE");
+    if (recomp && busphase && atoi(busphase) != 0 && recomp_interp_force()) {
+        fprintf(stderr,
+                "smk: warning: bus-phase timing with interpreter force ON only times "
+                "the intercepted root; registered nested calls use the untimed fallback. "
+                "Set SMK_INTERP=0 when validating a fully recompiled call closure.\n");
+    }
 
     /* === Run the boot chain (shell mode only) === */
     if (!realframe) {
@@ -200,18 +251,26 @@ int main(int argc, char *argv[]) {
         printf("smk: TIMED-RECOMP PROFILE mode (ranking JSR/JSL call targets)\n");
     }
 
-    /* Install the interception hook + register the intercept set. Default is the
-     * single OAM-DMA leaf $80:946E (RTS/near). Override with
+    /* Install the interception hook + register the 18-root legacy default set.
+     * Override with
      * SMK_RECOMP_INTERCEPTS="80946E,81xxxx:L,..." (comma-separated 24-bit hex;
      * suffix ':L' marks a JSL/RTL-return routine, default JSR/RTS). */
     if (recomp) {
         recomp_timed_recomp_enable();
         const char *iv = getenv("SMK_RECOMP_INTERCEPTS");
+        /* September coverage gate: the original 18 roots plus four generated
+         * roots and their C callees. Validated with SMK_INTERP=0 and both
+         * SMK_RECOMP_BUSPHASE / SMK_RECOMP_PHASE_YIELD set to 1. */
+        if (iv && strcmp(iv, "coverage") == 0) {
+            iv = "80F90A,80A01F,80A027,818902,81B9A8,808BBF,8086A0,80BBCC,"
+                 "80BA50,808D83,80B7EB,8584D1,858EE9,85B945,858FB8,858B7A,"
+                 "808EED,81BB70:L,81F722,81FD22,8087D9,80879A";
+        }
         if (iv && *iv) {
             char buf[256];
             strncpy(buf, iv, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
             for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) {
-                bool is_long = (strchr(t, 'L') || strchr(t, 'l')) != NULL;
+                bool is_long = strchr(t, 'L') != NULL || strchr(t, 'l') != NULL;
                 uint32_t a = (uint32_t)strtoul(t, NULL, 16);
                 recomp_timed_add_intercept(a, is_long);
                 printf("smk: intercept $%06X (%s)\n", a, is_long ? "RTL" : "RTS");
@@ -220,8 +279,8 @@ int main(int argc, char *argv[]) {
             /* Default set: steady-state leaves each validated functionally exact
              * vs the emulation oracle (live WRAM + VRAM + CGRAM identical; only
              * dead stack scratch differs — gate with --ignore-wram 1F00-1FFF).
-             * The boot OAM-DMA $80946E (Phase-1 demo) is rendered-faithful but
-             * perturbs audio WRAM phase; reach it via SMK_RECOMP_INTERCEPTS. */
+             * The OAM-DMA $80946E has a separate exact bus-phase gate;
+             * reach it via SMK_RECOMP_INTERCEPTS. */
             /* autogen (autogen.py + batch.py), all PURE-LOGIC, gated byte-identical
              * THROUGH A RACE (title + Mode-7 gameplay) as ONE combined set. Pure-logic
              * functions compose cleanly with no count ceiling; only hardware/timing-
@@ -239,18 +298,22 @@ int main(int argc, char *argv[]) {
             recomp_timed_add_intercept(0x80BA50, false);
             recomp_timed_add_intercept(0x808D83, false);
             recomp_timed_add_intercept(0x80B7EB, false);
-            recomp_timed_add_intercept(0x809EB2, false);   /* (calls $9FAC) */
+            /* $809EB2 is intentionally not in the default set: despite being
+             * pure game logic itself, its $809FAC callee crosses a transition
+             * timing boundary and diverges at race init. Keep it available via
+             * SMK_RECOMP_INTERCEPTS for focused work. */
             recomp_timed_add_intercept(0x8584D1, false);   /* counter $64 */
             recomp_timed_add_intercept(0x858EE9, false);
             recomp_timed_add_intercept(0x85B945, false);
             recomp_timed_add_intercept(0x858FB8, false);   /* per-object init */
             recomp_timed_add_intercept(0x858B7A, false);   /* anim state-machine: JMP ($8BB4,x) */
-            recomp_timed_add_intercept(0x8181C4, false);   /* race-start transition (cycle-accurate) */
-            recomp_timed_add_intercept(0x8592F9, false);   /* cycle-accurate rescue */
+            recomp_timed_add_intercept(0x808EED, false);   /* shared backward CFG blocks */
+            recomp_timed_add_intercept(0x81BB70, true);    /* hot RTL bit-mixing leaf */
+            /* $8181C4/$8592F9 are transition-sensitive and remain opt-in. */
             /* ($80C25A also rescues individually but the approximate cost model's
              * accumulated error trips combined sets >~19; add via SMK_RECOMP_INTERCEPTS
              * — exact per-instruction costs would lift this.) */
-            printf("smk: intercept 19 autogen funcs (Mode-7 + indirect + transitions), race-validated\n");
+            printf("smk: intercept 18 autogen funcs (Mode-7 + indirect), race-validated\n");
         }
     }
 
@@ -425,10 +488,19 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (profile) recomp_timed_profile_dump(40);
+    if (profile) {
+        int top = 40;
+        const char *profile_top = getenv("SMK_RECOMP_PROFILE_TOP");
+        if (profile_top && atoi(profile_top) > 0) top = atoi(profile_top);
+        recomp_timed_profile_dump(top);
+    }
+    if (recomp) {
+        printf("smk: final intercept_hits=%lu\n", recomp_timed_intercept_hits());
+    }
 
     printf("Shutting down...\n");
+    bool semantic_ok = smk_semantic_report();
     snesrecomp_shutdown();
 
-    return 0;
+    return semantic_ok ? 0 : 1;
 }

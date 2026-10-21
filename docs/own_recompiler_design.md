@@ -98,8 +98,8 @@ while keeping LakeSnes/DSP-1/intercept/menu/netplay intact.
 - **autogen.py** decodes a function from ROM + trace-exact entry M/X (CFG walk, M/X
   threaded), and emits a `RECOMP_PATCH`: register/stack/flag ops via `op_*`; loads/stores/
   STZ/logical/compare/inc-dec/shift/BIT across all common addressing modes via inline
-  `bus_read/write` + flags; JSR/JSL via `func_table_call`; branches via labels/gotos.
-  Indirect dispatch / per-(M,X) re-entry → `Unsupported` (clean fallback).
+  `bus_read/write` + flags; JSR/JSL and computed jumps via `func_table_call`; branches via
+  labels/gotos. Per-(M,X) re-entry remains `Unsupported` (clean fallback).
 - **batch.py** runs autogen over a profile's `PROF <addr> <count> <P> [MULTI-MX]` lines
   (the profiler now records each call target's entry M/X), reports yield + skip reasons.
 - **Profiled through a real race** (input script `360:Y` + mash `START` to `$36=02`, then
@@ -124,3 +124,112 @@ while keeping LakeSnes/DSP-1/intercept/menu/netplay intact.
 So the auto-generator reaches gameplay/Mode-7 code and proves it function-by-function against
 the oracle; steady-state pure-logic composes without limit, while transition/IO-timing code
 is the boundary that motivates the timed/cycle-accurate model.
+
+## Correctness pass (2026-08)
+
+- Fixed CFGs whose real entry is above a shared lower-address block. Emission stays in address
+  order for fallthrough, but every generated function now jumps explicitly to its true entry.
+  `$80:8EED` is the real-ROM regression case: without the entry jump it returned through
+  `$80:8EEA`; with the fix it passed 1,400 frames / 2,030 observed calls byte-identically.
+- Added width-correct 8/16-bit PHA/PLA/PHX/PLX/PHY/PLY emission and stack-cycle costs, plus
+  PHK/PHD/PLD, TSB/TRB, and TSX/TXS/TXY/TYX/TCD/TDC/TCS/TSC. Seven synthetic CFG/opcode tests
+  cover the new rules and REP/SEP width changes.
+- Added `$81:BB70` (738 profiled calls) and `$80:8EED` to the generated/default set. The
+  18-function default made 6,801 native interceptions during a scripted 1,400-frame run and
+  matched interpreter WRAM/VRAM/CGRAM at every sampled frame.
+- Re-gating also corrected an optimistic historical classification: `$80:9EB2` diverges at
+  race init through its `$80:9FAC` callee, while `$81:81C4` and `$85:92F9` are transition
+  sensitive. Their generated bodies remain available for opt-in experiments, but they are no
+  longer enabled by default.
+- Added binary/decimal-correct 8/16-bit ADC/SBC emission for the generator's existing memory
+  modes, plus NOP. This raised the generated set from 21 to 31 bodies. `$81:F638` and its eight
+  indirect JSR targets demonstrate the next boundary: the C semantics generate, but approximate
+  instruction timing reaches the race-init NMI boundary at a different point. The closure is an
+  opt-in regression for the bus-phase/exact-interrupt milestone, not part of the safe default.
+- Corrected 32 shared opcode-table sizes: `($dp,X)`, `($dp)`, `($dp),Y`, `[$dp]`, and
+  `[$dp],Y` all carry one operand byte. Added their 24-bit effective-address helpers together
+  with stack-relative `$dp,S` and `($dp,S),Y`, including bank-00 pointer wrap semantics.
+- Added `MVN`/`MVP` generation with per-byte ticking, data-bank update, direction, accumulator
+  count, and index-width behavior. The generated set is now 32 bodies.
+- CFG nodes are keyed by `(PC,M,X)` and use explicit successor gotos, so internal width-state
+  merges no longer misdecode immediates. The profiler now emits exact entry combinations such as
+  `VARIANTS=00,20`; generated multi-entry functions dispatch from live M/X flags without trying
+  impossible combinations. This matters for the SPC700 upload routines `$81:F504`/`$81:F4B2`,
+  where inventing X=8 turns a 16-bit immediate's high byte into a false `BRK`.
+- Full standard-route audit: 361 distinct direct targets, 56 already registered and all 305
+  remaining candidates generated (`unsupported: 0`). Fifteen focused generator tests pass; the
+  Release build passes; the 18-function default still makes 6,801 interceptions and matches all
+  140 reference snapshots across the 1,400-frame route.
+- M3 started with path-dependent timing: taken conditional branches and `BRA`/`BRL` add their
+  missing internal cycle. Sixteen generator tests pass and the default 18-function oracle gate
+  remains green. `$81:F638` still diverges first at frame 1040, proving the remaining fault is
+  phase/interrupt placement rather than a missing constant branch cost.
+- Added an opt-in bus-phase runtime (`SMK_RECOMP_BUSPHASE=1`). Generated instructions perform
+  timed ROM fetches, timed data reads/writes at their live addresses, internal idle phases, and
+  synthetic RTS/RTL stack phases; the flag-off path retains the validated aggregate model.
+  `JSR (abs,X)` now includes its two previously missing jump-table reads. The prototype is stable
+  and generated nested calls now materialize their return PC on the emulated stack before they
+  can yield. Aggregate totals are pinned by tests at RTS=40, RTL=42, and FastROM
+  `JSR (abs,X)`=52 master cycles.
+- Closed the `$81:F638` timing regression as a full C call closure. The original red run left
+  `SMK_INTERP` at its default ON setting, so all eight registered children used the untimed
+  interpreter and made every observed standard-route root call exactly 134 master cycles short.
+  With `SMK_INTERP=0`,
+  bus-phase timing and native children enabled, 2,715 root interceptions match every one of the
+  140 standard-route snapshots through frame 1400 byte-for-byte, including stack WRAM. The
+  default 18-function gate also remains green when its documented dead stack scratch is ignored.
+  Twenty generator tests pass. General checkInt micro-phases and exact stack/RMW/JSL bus ordering
+  are still M3 work; this result proves the first difficult closure, not the whole timing model.
+- Replaced the generated-call integer byte count with an explicit caller-SP/PB frame token.
+  Aggregate JSL now enters and restores the target program bank correctly; bus-phase interpreter
+  fallback consumes the already-materialized frame rather than pushing a second sentinel. The
+  fallback temporarily suspends the timed recomp hook and preserves pending interrupt semantics,
+  so force/depth fallback no longer recursively intercepts itself. Re-gating the default set now
+  executes 11,794 native interceptions (the earlier 6,801 count was before PB correction) while
+  retaining byte-identical state outside `$1F00-$1FFF`; the exact `$81:F638` closure remains
+  byte-identical including stack WRAM for all 2,715 calls.
+- Split interrupt sampling from instruction-boundary yielding and encoded LakeSnes `checkInt`
+  positions in generated code. Checked 8/16-bit bus helpers sample before a byte or between word
+  bytes; RMW writes use the native high/check/low order; branch sampling depends on the taken
+  path; and ordered stack/call/return helpers cover PHA/PLA-family operations, JSR/JSL, RTS, and
+  RTL. The suite now has 26 focused generator tests. Rebuilding all 32 generated functions keeps
+  the `$81:F638` closure raw-byte-identical for 140/140 snapshots and the default 18-function
+  set byte-identical outside its documented dead stack scratch.
+- Split the two non-linear call fetch sequences. JSL now delays its bank operand until after the
+  old PB push and idle; `JSR (abs,X)` pushes its return word between the low and high operand
+  fetches, then idles before the checked jump-table word. The F638 closure executes that indirect
+  sequence twice per root invocation and remains raw-byte-identical across 2,715 calls. JSL has
+  generator/build coverage, while a fully registered child closure is still needed for its
+  ROM-level timing gate.
+- Added bus-phase emission for direct JMP/JML and all three indirect tail forms. Checks now occur
+  between the correct operand/table bytes, `JMP (abs,X)` idles before its checked table read, and
+  JML `[abs]` samples before the bank byte. Direct targets already decoded in the same CFG become
+  local C gotos; this removes three unnecessary fallback exits in the generated set. Thirty
+  generator tests and both standard ROM gates remain green; the default set's only raw changes
+  are dead stack scratch caused by avoiding those fallback return frames.
+- Replaced aggregate MVN/MVP loops with one bus-visible iteration per C CFG pass. Each byte now
+  refetches the three-byte instruction, sets DB before the source read, performs the destination
+  write, updates A/X/Y, and ends with LakeSnes's idle/check/idle sequence. A timing yield resumes
+  at the block-move opcode until A wraps, then at the following PC. RTI now idles twice, restores
+  P and PC, samples interrupts with the restored I flag, pulls PB, and leaves through the redirect
+  protocol rather than the interception hook's synthetic RTS/RTL. `cpu_set_p` also enforces E-mode
+  M/X and immediate X/Y narrowing. Thirty-one generator tests, the Release build, the 2,715-hit
+  raw F638 gate, and the 11,794-hit default gate remain green. The standard 32 generated functions
+  contain none of MVN/MVP/RTI, so focused synthetic coverage is not yet a ROM-level proof.
+- Added dynamic addressing-mode penalties in their LakeSnes bus positions. Direct-page forms idle
+  when DP's low byte is nonzero; DP-indexed and stack-relative forms perform their fixed idles;
+  `(dp),Y` and absolute indexed reads test live X width and page crossing, while writes/RMW always
+  idle. Indirect helpers keep penalties on the correct side of pointer reads. The shared runtime
+  helper becomes a CPU idle in bus-phase mode and an aggregate tick otherwise, so generated code
+  does not double-count either path. Regeneration adds 224 potential penalty sites to the standard
+  set. Thirty-four generator tests, Release, the raw 2,715-hit F638 gate, and the functional
+  11,794-hit default gate all pass; the latter's remaining raw bytes stay solely in dead stack
+  scratch `$1F00-$1FFF`.
+- Replaced the hand-written `$80:946E` OAM-DMA approximation with a generated bus-phase body.
+  The `STA $420B` trigger, following opcode fetch, and following operand fetch now traverse
+  LakeSnes separately, so its deferred DMA state machine stalls the CPU before `REP` executes;
+  the same direct bus calls preserve LakeSnes open-bus updates. The focused gate executes 1,071
+  interceptions and matches 140/140 raw snapshots through frame 1,400, superseding the old
+  86-frame limit. Thirty-five generator tests, Release, the 2,715-hit raw F638 gate, and the
+  11,794-hit functional default gate remain green. The aggregate path and internal-latch-only
+  assertions remain outside this exact claim.

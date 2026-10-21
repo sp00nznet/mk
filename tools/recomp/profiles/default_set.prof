@@ -1,3 +1,8 @@
+# Profiled functions emitted into smk_autogen.c. main.c owns the smaller
+# oracle-gated default interception set; transition-sensitive bodies stay opt-in.
+# Hardware-touching OAM DMA leaf: generated here so its CPU accesses drive the
+# LakeSnes DMA state machine one bus phase at a time. It remains opt-in.
+PROF 80946E 0        30
 PROF 80F90A 4840     00 
 PROF 80A01F 1870     00 
 PROF 80A027 1870     00 
@@ -17,3 +22,23 @@ PROF 858FB8 8        00
 PROF 858B7A 191      00 
 PROF 8181C4 191      00 
 PROF 8592F9 191      00 
+PROF 808EED 2030     00
+PROF 81BB70 738      00
+PROF 81F638 2715     00
+# Indirect JSR closure used by $81:F638 (not visible to the direct-call profiler).
+PROF 81F6C7 0        00
+PROF 81F6D2 0        00
+PROF 81F6DD 0        00
+PROF 81F6E8 0        00
+PROF 81F6F3 0        00
+PROF 81F6FE 0        00
+PROF 81F705 0        00
+PROF 81F710 0        00
+PROF 8596DC 675      00
+PROF 81F56C 58295    20
+# Coverage expansion: two leaf roots and two roots with generated C callees.
+# Gated individually and together; opt in via the bus-phase coverage preset.
+PROF 81F722 4096     00
+PROF 81FD22 2684     00
+PROF 8087D9 2440     00
+PROF 80879A 2440     00
