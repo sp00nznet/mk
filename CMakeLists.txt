@@ -21,6 +21,7 @@ add_library(smk_game STATIC
     src/recomp/smk_boot.c
     src/recomp/smk_init.c
     src/recomp/smk_title.c
+    src/recomp/smk_algorithms.c
 )
 target_link_libraries(smk_game PUBLIC snesrecomp)
 
@@ -52,3 +53,14 @@ target_link_libraries(oam_dumper PRIVATE lakesnes_hw)
 add_executable(lakesnes_ref tools/lakesnes_ref.c)
 target_include_directories(lakesnes_ref PRIVATE ext/snesrecomp/ext/LakeSnes)
 target_link_libraries(lakesnes_ref PRIVATE lakesnes_hw)
+
+option(SMK_BUILD_SEMANTIC_TESTS "Build semantic checks and ROM CPU oracle tests" OFF)
+if(SMK_BUILD_SEMANTIC_TESTS)
+    add_executable(test_word_mix_unit tools/test_word_mix_unit.c src/recomp/smk_algorithms.c)
+    enable_testing()
+    add_test(NAME word_mix_unit COMMAND test_word_mix_unit)
+
+    add_executable(test_word_mix tools/test_word_mix.c src/recomp/smk_algorithms.c)
+    target_include_directories(test_word_mix PRIVATE ext/snesrecomp/ext/LakeSnes)
+    target_link_libraries(test_word_mix PRIVATE lakesnes_hw)
+endif()
