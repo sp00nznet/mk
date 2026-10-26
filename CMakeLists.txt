@@ -21,6 +21,7 @@ add_library(smk_game STATIC
     src/recomp/smk_boot.c
     src/recomp/smk_init.c
     src/recomp/smk_title.c
+    src/recomp/smk_direction.c
 )
 target_link_libraries(smk_game PUBLIC snesrecomp)
 
@@ -52,3 +53,14 @@ target_link_libraries(oam_dumper PRIVATE lakesnes_hw)
 add_executable(lakesnes_ref tools/lakesnes_ref.c)
 target_include_directories(lakesnes_ref PRIVATE ext/snesrecomp/ext/LakeSnes)
 target_link_libraries(lakesnes_ref PRIVATE lakesnes_hw)
+
+option(SMK_BUILD_DIRECTION_TESTS "Build direction unit and ROM CPU oracle tests" OFF)
+if(SMK_BUILD_DIRECTION_TESTS)
+    add_executable(test_direction_unit tools/test_direction_unit.c src/recomp/smk_direction.c)
+    enable_testing()
+    add_test(NAME direction_unit COMMAND test_direction_unit)
+
+    add_executable(test_vector_direction tools/test_vector_direction.c src/recomp/smk_direction.c)
+    target_include_directories(test_vector_direction PRIVATE ext/snesrecomp/ext/LakeSnes)
+    target_link_libraries(test_vector_direction PRIVATE lakesnes_hw)
+endif()
